@@ -24,7 +24,7 @@ func main() {
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://postgres:postgres@localhost:5432/trigger_db?sslmode=disable"
+		dsn = "postgres://postgres:postgres_password@localhost:5440/trigger_db?sslmode=disable"
 	}
 	store, err := db.NewStore(ctx, dsn)
 	if err != nil {
@@ -42,8 +42,8 @@ func main() {
 	}
 	defer publisher.Close()
 
-	// Ignore unused for now
-	_ = workflows.NewService(store)
+	workflowService := workflows.NewService(store)
+	workflowHandler := workflows.NewHandler(workflowService, store)
 
 	webhookHandler := webhooks.NewHandler(store, publisher)
 	schedulePoller := schedules.NewPoller(store, publisher)
@@ -58,13 +58,13 @@ func main() {
 	r.Post("/webhooks/{path}", webhookHandler.HandleIncomingWebhook)
 
 	r.Route("/v1", func(r chi.Router) {
-		r.Post("/workflows", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
-		r.Post("/workflows/{id}/versions", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
-		r.Get("/workflows/{id}", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
-		r.Post("/workflows/{id}/webhooks", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
-		r.Post("/workflows/{id}/schedules", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
-		r.Get("/workflows/{id}/executions", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
-		r.Get("/executions/{id}", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
+		r.Post("/workflows", workflowHandler.CreateWorkflow)
+		r.Post("/workflows/{id}/versions", workflowHandler.AddVersion)
+		r.Get("/workflows/{id}", workflowHandler.GetWorkflow)
+		r.Post("/workflows/{id}/webhooks", workflowHandler.CreateWebhook)
+		r.Post("/workflows/{id}/schedules", workflowHandler.CreateSchedule)
+		r.Get("/workflows/{id}/executions", workflowHandler.ListExecutions)
+		r.Get("/executions/{id}", workflowHandler.GetExecution)
 	})
 
 	srv := &http.Server{
