@@ -58,3 +58,7 @@ func (s *Service) AddVersion(ctx context.Context, workflowID pgtype.UUID, versio
 	})
 	return &wv, err
 }
+
+func (s *Service) GetStore() *db.Store {
+	return s.store
+}
