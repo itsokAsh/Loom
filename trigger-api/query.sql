@@ -16,6 +16,11 @@ WHERE id = $1 LIMIT 1;
 SELECT * FROM workflow_versions
 WHERE workflow_id = $1 AND version = $2 LIMIT 1;
 
+-- name: GetLatestWorkflowVersion :one
+SELECT * FROM workflow_versions
+WHERE workflow_id = $1
+ORDER BY version DESC LIMIT 1;
+
 -- name: CreateWebhook :one
 INSERT INTO webhooks (workflow_id, path, secret)
 VALUES ($1, $2, $3)

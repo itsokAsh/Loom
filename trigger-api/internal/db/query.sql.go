@@ -295,6 +295,24 @@ func (q *Queries) GetWorkflowVersion(ctx context.Context, arg GetWorkflowVersion
 	return i, err
 }
 
+const getLatestWorkflowVersion = `-- name: GetLatestWorkflowVersion :one
+SELECT workflow_id, version, dag_definition, created_at FROM workflow_versions
+WHERE workflow_id = $1
+ORDER BY version DESC LIMIT 1
+`
+
+func (q *Queries) GetLatestWorkflowVersion(ctx context.Context, workflowID pgtype.UUID) (WorkflowVersion, error) {
+	row := q.db.QueryRow(ctx, getLatestWorkflowVersion, workflowID)
+	var i WorkflowVersion
+	err := row.Scan(
+		&i.WorkflowID,
+		&i.Version,
+		&i.DagDefinition,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listExecutions = `-- name: ListExecutions :many
 SELECT id, workflow_id, workflow_version, idempotency_key, status, started_at, completed_at, created_at, updated_at FROM executions
 WHERE workflow_id = $1
