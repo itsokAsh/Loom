@@ -48,6 +48,38 @@ services:
       retries: 5
     restart: unless-stopped
 
+  trigger-api:
+    build:
+      context: .
+      dockerfile: trigger-api/Dockerfile
+    container_name: workflow_trigger
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: "postgres://postgres:postgres_password@postgres:5432/trigger_db?sslmode=disable"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  orchestration-engine:
+    build:
+      context: .
+      dockerfile: orchestration-engine/Dockerfile
+    container_name: workflow_orchestration
+    environment:
+      DATABASE_URL: "postgres://postgres:postgres_password@postgres:5432/orchestration_db?sslmode=disable"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   rabbitmq_data:

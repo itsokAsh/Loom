@@ -68,18 +68,14 @@ func (p *Poller) poll(ctx context.Context) {
 }
 
 func (p *Poller) processSchedule(ctx context.Context, s db.Schedule) {
-	wv, err := p.store.GetWorkflowVersion(ctx, db.GetWorkflowVersionParams{
-		WorkflowID: s.WorkflowID,
-		Version:    1, // Fetch latest
-	})
+	wv, err := p.store.GetLatestWorkflowVersion(ctx, s.WorkflowID)
 	if err != nil {
 		log.Printf("Failed to fetch workflow version for schedule %v: %v", s.ID, err)
 		return
 	}
 
-	var dag contracts.DAGDefinition
-	if err := json.Unmarshal(wv.DagDefinition, &dag); err != nil {
-		log.Printf("Failed to parse DAG for schedule %v: %v", s.ID, err)
+	if !json.Valid(wv.DagDefinition) {
+		log.Printf("Invalid DAG JSON for schedule %v", s.ID)
 		return
 	}
 
@@ -87,7 +83,7 @@ func (p *Poller) processSchedule(ctx context.Context, s db.Schedule) {
 
 	exec, err := p.store.CreateExecution(ctx, db.CreateExecutionParams{
 		WorkflowID:      s.WorkflowID,
-		WorkflowVersion: 1,
+		WorkflowVersion: wv.Version,
 		IdempotencyKey:  idempKey,
 		Status:          "PENDING",
 	})
@@ -99,9 +95,9 @@ func (p *Poller) processSchedule(ctx context.Context, s db.Schedule) {
 		ExecutionID:     fmt.Sprintf("%x", exec.ID.Bytes),
 		WorkflowID:      fmt.Sprintf("%x", exec.WorkflowID.Bytes),
 		WorkflowVersion: int(exec.WorkflowVersion),
-		IdempotencyKey:  idempKey,
 		TriggerData:     map[string]interface{}{"cron_time": s.NextRunAt.Time},
-		WorkflowDAG:     dag,
+		DAGDefinition:   wv.DagDefinition,
+		TriggeredAt:     time.Now(),
 	}
 
 	if err := p.publisher.PublishNewRun(ctx, msg); err != nil {

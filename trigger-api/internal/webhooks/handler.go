@@ -3,6 +3,7 @@ package webhooks
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 	"fmt"
 
 	"github.com/go-chi/chi/v5"
@@ -40,9 +41,15 @@ func (h *Handler) HandleIncomingWebhook(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	wv, err := h.store.GetLatestWorkflowVersion(ctx, webhook.WorkflowID)
+	if err != nil {
+		http.Error(w, "Failed to fetch latest workflow version", http.StatusInternalServerError)
+		return
+	}
+
 	exec, err := h.store.CreateExecution(ctx, db.CreateExecutionParams{
 		WorkflowID:      webhook.WorkflowID,
-		WorkflowVersion: 1, // Simplified lookup
+		WorkflowVersion: wv.Version,
 		IdempotencyKey:  idempKey,
 		Status:          "PENDING",
 	})
@@ -63,18 +70,8 @@ func (h *Handler) HandleIncomingWebhook(w http.ResponseWriter, r *http.Request) 
 		json.NewDecoder(r.Body).Decode(&payload)
 	}
 
-	wv, err := h.store.GetWorkflowVersion(ctx, db.GetWorkflowVersionParams{
-		WorkflowID: exec.WorkflowID,
-		Version:    exec.WorkflowVersion,
-	})
-	if err != nil {
-		http.Error(w, "Failed to fetch workflow version", http.StatusInternalServerError)
-		return
-	}
-
-	var dag contracts.DAGDefinition
-	if err := json.Unmarshal(wv.DagDefinition, &dag); err != nil {
-		http.Error(w, "Failed to parse DAG", http.StatusInternalServerError)
+	if !json.Valid(wv.DagDefinition) {
+		http.Error(w, "Invalid DAG JSON", http.StatusInternalServerError)
 		return
 	}
 
@@ -82,9 +79,9 @@ func (h *Handler) HandleIncomingWebhook(w http.ResponseWriter, r *http.Request) 
 		ExecutionID:     fmt.Sprintf("%x", exec.ID.Bytes),
 		WorkflowID:      fmt.Sprintf("%x", exec.WorkflowID.Bytes),
 		WorkflowVersion: int(exec.WorkflowVersion),
-		IdempotencyKey:  idempKey,
 		TriggerData:     payload,
-		WorkflowDAG:     dag,
+		DAGDefinition:   wv.DagDefinition,
+		TriggeredAt:     time.Now(),
 	}
 
 	if err := h.publisher.PublishNewRun(ctx, msg); err != nil {
