@@ -1,0 +1,18 @@
+{
+  "name": "User Onboarding with Welcome Email",
+  "dag": {
+    "nodes": [
+      {
+        "id": "send_welcome_email",
+        "type": "EMAIL",
+        "config": {
+          "to": "{{trigger.email}}",
+          "subject": "Welcome to Our Platform!",
+          "body": "Hi {{trigger.name}},\n\nThanks for signing up. We're excited to have you on board!\n\nBest regards,\nThe Team",
+          "from": "noreply@loom.com"
+        }
+      }
+    ],
+    "edges": []
+  }
+}

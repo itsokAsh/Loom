@@ -39,13 +39,14 @@ type OutboxMessage struct {
 }
 
 type WorkflowRun struct {
-	ExecutionID     pgtype.UUID        `json:"execution_id"`
-	WorkflowID      pgtype.UUID        `json:"workflow_id"`
-	WorkflowVersion int32              `json:"workflow_version"`
-	DagDefinition   []byte             `json:"dag_definition"`
-	Status          string             `json:"status"`
-	StartedAt       pgtype.Timestamptz `json:"started_at"`
-	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-	TriggerData     []byte             `json:"trigger_data"`
+	ExecutionID        pgtype.UUID        `json:"execution_id"`
+	WorkflowID         pgtype.UUID        `json:"workflow_id"`
+	WorkflowVersion    int32              `json:"workflow_version"`
+	DagDefinition      []byte             `json:"dag_definition"`
+	Status             string             `json:"status"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	CompletedAt        pgtype.Timestamptz `json:"completed_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	TriggerData        []byte             `json:"trigger_data"`
+	EmailDispatchCount pgtype.Int4        `json:"email_dispatch_count"`
 }

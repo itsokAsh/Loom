@@ -93,6 +93,25 @@ func (o *Orchestrator) HandleNewRun(msg contracts.NewRunMessage) error {
 		actionableNodes = toRun
 
 		for _, n := range actionableNodes {
+			// Check email dispatch limit for EMAIL nodes
+			if n.Type == "EMAIL" {
+				count, err := qtx.IncrementEmailDispatchCount(ctx, execID)
+				if err != nil {
+					// Limit exceeded - skip this node
+					err := qtx.InsertNodeExecution(ctx, db.InsertNodeExecutionParams{
+						ExecutionID: execID,
+						NodeID:      n.ID,
+						Status:      "SKIPPED",
+						MaxAttempts: 3,
+					})
+					if err != nil {
+						return fmt.Errorf("failed to insert skipped node execution: %w", err)
+					}
+					continue // Don't dispatch
+				}
+				fmt.Printf("Email dispatch count for execution %s: %d\n", msg.ExecutionID, count)
+			}
+
 			err := qtx.InsertNodeExecution(ctx, db.InsertNodeExecutionParams{
 				ExecutionID: execID,
 				NodeID:      n.ID,
@@ -374,6 +393,25 @@ func (o *Orchestrator) HandleNodeResult(msg contracts.NodeResultMessage) error {
 				}
 			} else {
 				for _, n := range nodes {
+					// Check email dispatch limit for EMAIL nodes
+					if n.Type == "EMAIL" {
+						count, err := qtx.IncrementEmailDispatchCount(ctx, execID)
+						if err != nil {
+							// Limit exceeded - skip this node
+							err := qtx.InsertNodeExecution(ctx, db.InsertNodeExecutionParams{
+								ExecutionID: execID,
+								NodeID:      n.ID,
+								Status:      "SKIPPED",
+								MaxAttempts: 3,
+							})
+							if err != nil {
+								return err
+							}
+							continue // Don't dispatch
+						}
+						fmt.Printf("Email dispatch count for execution %s: %d\n", msg.ExecutionID, count)
+					}
+
 					err := qtx.InsertNodeExecution(ctx, db.InsertNodeExecutionParams{
 						ExecutionID: execID,
 						NodeID:      n.ID,

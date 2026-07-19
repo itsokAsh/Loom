@@ -113,7 +113,7 @@ func (q *Queries) GetNodeExecution(ctx context.Context, arg GetNodeExecutionPara
 }
 
 const getWorkflowRun = `-- name: GetWorkflowRun :one
-SELECT execution_id, workflow_id, workflow_version, dag_definition, status, started_at, completed_at, updated_at, trigger_data FROM workflow_runs
+SELECT execution_id, workflow_id, workflow_version, dag_definition, status, started_at, completed_at, updated_at, trigger_data, email_dispatch_count FROM workflow_runs
 WHERE execution_id = $1 FOR UPDATE
 `
 
@@ -130,8 +130,24 @@ func (q *Queries) GetWorkflowRun(ctx context.Context, executionID pgtype.UUID) (
 		&i.CompletedAt,
 		&i.UpdatedAt,
 		&i.TriggerData,
+		&i.EmailDispatchCount,
 	)
 	return i, err
+}
+
+const incrementEmailDispatchCount = `-- name: IncrementEmailDispatchCount :one
+UPDATE workflow_runs
+SET email_dispatch_count = email_dispatch_count + 1
+WHERE execution_id = $1
+  AND email_dispatch_count < 100
+RETURNING email_dispatch_count
+`
+
+func (q *Queries) IncrementEmailDispatchCount(ctx context.Context, executionID pgtype.UUID) (pgtype.Int4, error) {
+	row := q.db.QueryRow(ctx, incrementEmailDispatchCount, executionID)
+	var email_dispatch_count pgtype.Int4
+	err := row.Scan(&email_dispatch_count)
+	return email_dispatch_count, err
 }
 
 const insertDispatchedTask = `-- name: InsertDispatchedTask :one

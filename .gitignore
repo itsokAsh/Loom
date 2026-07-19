@@ -5,6 +5,8 @@
 *.so
 *.dylib
 trigger-api/main
+orchestration-engine/engine
+node-worker-pool/worker
 
 # Test binary, built with `go test -c`
 *.test
@@ -17,16 +19,52 @@ trigger-api/main
 
 # Go workspace file
 go.work
+go.work.sum
 
 # IDEs
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 
 # OS specific
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Secrets
+# Secrets and sensitive data
 .env
+.env.local
+.env.*.local
 *.pem
 *.key
+secrets/
+*.secret
+
+# Test scripts with personal data
+simple-test.ps1
+final-test.ps1
+quick-email-test.ps1
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker volumes (data persistence)
+postgres_data/
+rabbitmq_data/
+redis_data/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup

@@ -1,0 +1,622 @@
+# Complete Phase 3: Wire Up Trigger API REST Endpoints
+
+## Problem
+
+The Trigger API has 7 REST endpoints that currently return `501 Not Implemented`. The underlying database queries (via sqlc) and business logic (via `workflows.Service`) **already exist** — they just aren't connected to HTTP handlers. This plan wires them up.
+
+## Current State
+
+Here's what already exists and what's missing for each endpoint:
+
+| Endpoint | DB Query (exists ✅) | Service Logic | HTTP Handler |
+|---|---|---|---|
+| `POST /v1/workflows` | `CreateWorkflow` ✅ | `Service.CreateWorkflow()` ✅ | ❌ **Missing** |
+| `POST /v1/workflows/{id}/versions` | `CreateWorkflowVersion` ✅ | `Service.AddVersion()` ✅ | ❌ **Missing** |
+| `GET /v1/workflows/{id}` | `GetWorkflow` ✅ | `Service.GetWorkflow()` ✅ | ❌ **Missing** |
+| `POST /v1/workflows/{id}/webhooks` | `CreateWebhook` ✅ | ❌ None | ❌ **Missing** |
+| `POST /v1/workflows/{id}/schedules` | `CreateSchedule` ✅ | ❌ None | ❌ **Missing** |
+| `GET /v1/workflows/{id}/executions` | `ListExecutions` ✅ | ❌ None | ❌ **Missing** |
+| `GET /v1/executions/{id}` | `GetExecution` ✅ | ❌ None | ❌ **Missing** |
+
+**Summary:** We need to create 1 new file (HTTP handler) and modify 2 existing files (service + main).
+
+---
+
+## Proposed Changes
+
+### Trigger API Service
+
+#### [NEW] [handler.go](file:///c:/Users/ashcr/Desktop/Loom/Loom/trigger-api/internal/workflows/handler.go)
+
+A new HTTP handler struct that handles all 7 workflow-related REST endpoints. This follows the same pattern as the existing [webhooks/handler.go](file:///c:/Users/ashcr/Desktop/Loom/Loom/trigger-api/internal/webhooks/handler.go).
+
+```go
+package workflows
+
+import (
+    "encoding/json"
+    "net/http"
+
+    "github.com/go-chi/chi/v5"
+    "github.com/loom/trigger-api/internal/db"
+)
+
+type Handler struct {
+    service *Service
+    store   *db.Store
+}
+
+func NewHandler(service *Service, store *db.Store) *Handler {
+    return &Handler{service: service, store: store}
+}
+```
+
+Each endpoint is a method on this `Handler`:
+
+---
+
+**1. `POST /v1/workflows` — Create a new workflow**
+
+What it does: Creates a workflow + its first version (v1) in a single transaction.
+
+```go
+// Request body:
+// {
+//   "name": "Welcome Email Flow",
+//   "dag": {
+//     "nodes": [
+//       {"id": "n1", "type": "TRANSFORM", "config": {...}},
+//       {"id": "n2", "type": "HTTP", "config": {...}}
+//     ],
+//     "edges": [
+//       {"source": "n1", "target": "n2"}
+//     ]
+//   }
+// }
+//
+// Response (201 Created):
+// {
+//   "id": "a1b2c3d4-...",
+//   "name": "Welcome Email Flow",
+//   "version": 1,
+//   "createdAt": "2026-07-16T10:00:00Z"
+// }
+
+func (h *Handler) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        Name string          `json:"name"`
+        DAG  json.RawMessage `json:"dag"`
+    }
+
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+        return
+    }
+
+    if req.Name == "" {
+        http.Error(w, "\"name\" is required", http.StatusBadRequest)
+        return
+    }
+    if len(req.DAG) == 0 {
+        http.Error(w, "\"dag\" is required", http.StatusBadRequest)
+        return
+    }
+
+    // Service.CreateWorkflow already handles the transaction
+    wf, wv, err := h.service.CreateWorkflow(r.Context(), req.Name, req.DAG)
+    if err != nil {
+        http.Error(w, "Failed to create workflow", http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(map[string]interface{}{
+        "id":        wf.ID,
+        "name":      wf.Name,
+        "version":   wv.Version,
+        "createdAt": wf.CreatedAt,
+    })
+}
+```
+
+---
+
+**2. `GET /v1/workflows/{id}` — Get a workflow by ID**
+
+What it does: Returns the workflow metadata.
+
+```go
+// Response (200 OK):
+// {
+//   "id": "a1b2c3d4-...",
+//   "name": "Welcome Email Flow",
+//   "createdAt": "2026-07-16T10:00:00Z"
+// }
+
+func (h *Handler) GetWorkflow(w http.ResponseWriter, r *http.Request) {
+    id := chi.URLParam(r, "id")
+
+    // Parse the string ID into pgtype.UUID
+    var pgID pgtype.UUID
+    if err := pgID.Scan(id); err != nil {
+        http.Error(w, "Invalid workflow ID format", http.StatusBadRequest)
+        return
+    }
+
+    wf, err := h.service.GetWorkflow(r.Context(), pgID)
+    if err != nil {
+        http.Error(w, "Workflow not found", http.StatusNotFound)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(wf)
+}
+```
+
+---
+
+**3. `POST /v1/workflows/{id}/versions` — Add a new version to a workflow**
+
+What it does: Adds a new DAG version to an existing workflow.
+
+```go
+// Request body:
+// {
+//   "version": 2,
+//   "dag": { "nodes": [...], "edges": [...] }
+// }
+//
+// Response (201 Created):
+// {
+//   "workflowId": "a1b2c3d4-...",
+//   "version": 2,
+//   "createdAt": "2026-07-16T10:05:00Z"
+// }
+
+func (h *Handler) AddVersion(w http.ResponseWriter, r *http.Request) {
+    id := chi.URLParam(r, "id")
+
+    var pgID pgtype.UUID
+    if err := pgID.Scan(id); err != nil {
+        http.Error(w, "Invalid workflow ID format", http.StatusBadRequest)
+        return
+    }
+
+    var req struct {
+        Version int32           `json:"version"`
+        DAG     json.RawMessage `json:"dag"`
+    }
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+        return
+    }
+
+    wv, err := h.service.AddVersion(r.Context(), pgID, req.Version, req.DAG)
+    if err != nil {
+        http.Error(w, "Failed to add version", http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(wv)
+}
+```
+
+---
+
+**4. `POST /v1/workflows/{id}/webhooks` — Register a webhook for a workflow**
+
+What it does: Creates a webhook entry with a random path and secret.
+
+```go
+// Request body:  (empty — the path and secret are auto-generated)
+// {}
+//
+// Response (201 Created):
+// {
+//   "id": "...",
+//   "workflowId": "...",
+//   "path": "abc123xyz",       <-- use this in POST /webhooks/abc123xyz
+//   "secret": "generated-secret",
+//   "createdAt": "..."
+// }
+
+func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {
+    id := chi.URLParam(r, "id")
+
+    var pgID pgtype.UUID
+    if err := pgID.Scan(id); err != nil {
+        http.Error(w, "Invalid workflow ID format", http.StatusBadRequest)
+        return
+    }
+
+    // Generate a random path (base62-like) and a random secret
+    path := generateRandomString(12)
+    secret := generateRandomString(32)
+
+    webhook, err := h.store.CreateWebhook(r.Context(), db.CreateWebhookParams{
+        WorkflowID: pgID,
+        Path:       path,
+        Secret:     secret,
+    })
+    if err != nil {
+        http.Error(w, "Failed to create webhook", http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(webhook)
+}
+```
+
+> [!NOTE]
+> `generateRandomString` is a small helper function using `crypto/rand` that generates a URL-safe random string. It will be added at the bottom of this file.
+
+---
+
+**5. `POST /v1/workflows/{id}/schedules` — Register a cron schedule for a workflow**
+
+What it does: Creates a cron schedule. The poller ([poller.go](file:///c:/Users/ashcr/Desktop/Loom/Loom/trigger-api/internal/schedules/poller.go)) will automatically pick it up.
+
+```go
+// Request body:
+// {
+//   "cronExpression": "*/5 * * * *"    <-- every 5 minutes
+// }
+//
+// Response (201 Created):
+// {
+//   "id": "...",
+//   "workflowId": "...",
+//   "cronExpression": "*/5 * * * *",
+//   "nextRunAt": "2026-07-16T10:05:00Z",
+//   "createdAt": "..."
+// }
+
+func (h *Handler) CreateSchedule(w http.ResponseWriter, r *http.Request) {
+    id := chi.URLParam(r, "id")
+
+    var pgID pgtype.UUID
+    if err := pgID.Scan(id); err != nil {
+        http.Error(w, "Invalid workflow ID format", http.StatusBadRequest)
+        return
+    }
+
+    var req struct {
+        CronExpression string `json:"cronExpression"`
+    }
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+        return
+    }
+
+    // Validate the cron expression by parsing it
+    parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+    schedule, err := parser.Parse(req.CronExpression)
+    if err != nil {
+        http.Error(w, "Invalid cron expression", http.StatusBadRequest)
+        return
+    }
+
+    nextRun := schedule.Next(time.Now())
+
+    sched, err := h.store.CreateSchedule(r.Context(), db.CreateScheduleParams{
+        WorkflowID:     pgID,
+        CronExpression: req.CronExpression,
+        NextRunAt:      pgtype.Timestamptz{Time: nextRun, Valid: true},
+    })
+    if err != nil {
+        http.Error(w, "Failed to create schedule", http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(sched)
+}
+```
+
+---
+
+**6. `GET /v1/workflows/{id}/executions` — List execution history for a workflow**
+
+What it does: Returns a paginated list of past executions for a workflow.
+
+```go
+// Query params: ?limit=20&cursor=2026-07-16T09:00:00Z  (both optional)
+//
+// Response (200 OK):
+// [
+//   {
+//     "id": "...",
+//     "workflowId": "...",
+//     "status": "PENDING",
+//     "createdAt": "2026-07-16T10:00:00Z"
+//   },
+//   ...
+// ]
+
+func (h *Handler) ListExecutions(w http.ResponseWriter, r *http.Request) {
+    id := chi.URLParam(r, "id")
+
+    var pgID pgtype.UUID
+    if err := pgID.Scan(id); err != nil {
+        http.Error(w, "Invalid workflow ID format", http.StatusBadRequest)
+        return
+    }
+
+    limit := int32(20) // default
+    // Parse optional "limit" query param...
+
+    var cursor pgtype.Timestamptz
+    // Parse optional "cursor" query param...
+
+    executions, err := h.store.ListExecutions(r.Context(), db.ListExecutionsParams{
+        WorkflowID: pgID,
+        Limit:      limit,
+        Cursor:     cursor,
+    })
+    if err != nil {
+        http.Error(w, "Failed to list executions", http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(executions)
+}
+```
+
+---
+
+**7. `GET /v1/executions/{id}` — Get a single execution by ID**
+
+What it does: Returns the details of a specific execution.
+
+```go
+// Response (200 OK):
+// {
+//   "id": "...",
+//   "workflowId": "...",
+//   "workflowVersion": 1,
+//   "status": "PENDING",
+//   "startedAt": null,
+//   "completedAt": null,
+//   "createdAt": "2026-07-16T10:00:00Z"
+// }
+
+func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
+    id := chi.URLParam(r, "id")
+
+    var pgID pgtype.UUID
+    if err := pgID.Scan(id); err != nil {
+        http.Error(w, "Invalid execution ID format", http.StatusBadRequest)
+        return
+    }
+
+    exec, err := h.store.GetExecution(r.Context(), pgID)
+    if err != nil {
+        http.Error(w, "Execution not found", http.StatusNotFound)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(exec)
+}
+```
+
+---
+
+#### [MODIFY] [service.go](file:///c:/Users/ashcr/Desktop/Loom/Loom/trigger-api/internal/workflows/service.go)
+
+No major changes needed. The existing `CreateWorkflow`, `GetWorkflow`, and `AddVersion` methods already work. One small improvement:
+
+- Add a `GetStore()` accessor so the handler can access the store for queries that don't need service-layer logic (webhooks, schedules, executions).
+
+```diff
++func (s *Service) GetStore() *db.Store {
++    return s.store
++}
+```
+
+---
+
+#### [MODIFY] [main.go](file:///c:/Users/ashcr/Desktop/Loom/Loom/trigger-api/cmd/api/main.go)
+
+Replace the 7 stub handlers with calls to the real `workflows.Handler`:
+
+```diff
+-    // Ignore unused for now
+-    _ = workflows.NewService(store)
++    workflowService := workflows.NewService(store)
++    workflowHandler := workflows.NewHandler(workflowService, store)
+
+     webhookHandler := webhooks.NewHandler(store, publisher)
+     schedulePoller := schedules.NewPoller(store, publisher)
+
+     ...
+
+     r.Route("/v1", func(r chi.Router) {
+-        r.Post("/workflows", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
+-        r.Post("/workflows/{id}/versions", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
+-        r.Get("/workflows/{id}", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
+-        r.Post("/workflows/{id}/webhooks", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
+-        r.Post("/workflows/{id}/schedules", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
+-        r.Get("/workflows/{id}/executions", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
+-        r.Get("/executions/{id}", func(w http.ResponseWriter, req *http.Request) { w.WriteHeader(http.StatusNotImplemented) })
++        r.Post("/workflows", workflowHandler.CreateWorkflow)
++        r.Post("/workflows/{id}/versions", workflowHandler.AddVersion)
++        r.Get("/workflows/{id}", workflowHandler.GetWorkflow)
++        r.Post("/workflows/{id}/webhooks", workflowHandler.CreateWebhook)
++        r.Post("/workflows/{id}/schedules", workflowHandler.CreateSchedule)
++        r.Get("/workflows/{id}/executions", workflowHandler.ListExecutions)
++        r.Get("/executions/{id}", workflowHandler.GetExecution)
+     })
+```
+
+---
+
+## Testing Plan
+
+### Prerequisites
+
+```bash
+# 1. Start infrastructure
+docker-compose up -d
+
+# 2. Wait for health checks, then run the migration
+# Connect to postgres on port 5440 and run the migration SQL against trigger_db
+
+# 3. Start the Trigger API
+cd trigger-api
+go run ./cmd/api/main.go
+```
+
+### Test 1: Create a Workflow
+
+```bash
+curl -s -X POST http://localhost:8080/v1/workflows \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Welcome Email Flow",
+    "dag": {
+      "nodes": [
+        {"id": "n1", "type": "TRANSFORM", "config": {"rule": "capitalize_name"}},
+        {"id": "n2", "type": "HTTP", "config": {"url": "https://api.email.com/send", "method": "POST"}}
+      ],
+      "edges": [
+        {"source": "n1", "target": "n2"}
+      ]
+    }
+  }' | jq .
+```
+
+**Expected:** `201 Created` with JSON containing `id`, `name`, `version: 1`, `createdAt`.
+**Save the returned `id` — you'll need it for the next tests.** (Let's call it `$WF_ID`)
+
+### Test 2: Get the Workflow
+
+```bash
+curl -s http://localhost:8080/v1/workflows/$WF_ID | jq .
+```
+
+**Expected:** `200 OK` with the workflow's `id`, `name`, and `createdAt`.
+
+### Test 3: Add a New Version
+
+```bash
+curl -s -X POST http://localhost:8080/v1/workflows/$WF_ID/versions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": 2,
+    "dag": {
+      "nodes": [
+        {"id": "n1", "type": "TRANSFORM", "config": {"rule": "lowercase_email"}},
+        {"id": "n2", "type": "HTTP", "config": {"url": "https://api.email.com/v2/send", "method": "POST"}}
+      ],
+      "edges": [
+        {"source": "n1", "target": "n2"}
+      ]
+    }
+  }' | jq .
+```
+
+**Expected:** `201 Created` with `workflowId`, `version: 2`, `createdAt`.
+
+### Test 4: Register a Webhook
+
+```bash
+curl -s -X POST http://localhost:8080/v1/workflows/$WF_ID/webhooks \
+  -H "Content-Type: application/json" \
+  -d '{}' | jq .
+```
+
+**Expected:** `201 Created` with `id`, `workflowId`, `path` (random string), `secret` (random string).
+**Save the returned `path` — you'll need it to trigger the workflow.** (Let's call it `$WH_PATH`)
+
+### Test 5: Register a Cron Schedule
+
+```bash
+curl -s -X POST http://localhost:8080/v1/workflows/$WF_ID/schedules \
+  -H "Content-Type: application/json" \
+  -d '{"cronExpression": "*/5 * * * *"}' | jq .
+```
+
+**Expected:** `201 Created` with `id`, `workflowId`, `cronExpression`, `nextRunAt` (5 minutes from now).
+
+### Test 6: Trigger the Workflow via Webhook
+
+```bash
+curl -s -X POST http://localhost:8080/webhooks/$WH_PATH \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: test-run-001" \
+  -d '{"user": "John", "email": "john@example.com"}' | jq .
+```
+
+**Expected:** `202 Accepted` with `executionId` and `status: PENDING`.
+**Save the `executionId`.** (Let's call it `$EXEC_ID`)
+
+### Test 7: List Executions for the Workflow
+
+```bash
+curl -s http://localhost:8080/v1/workflows/$WF_ID/executions | jq .
+```
+
+**Expected:** `200 OK` with a JSON array containing at least the execution we just created with `status: PENDING`.
+
+### Test 8: Get a Single Execution
+
+```bash
+curl -s http://localhost:8080/v1/executions/$EXEC_ID | jq .
+```
+
+**Expected:** `200 OK` with full execution details including `workflowVersion`, `idempotencyKey`, `status`.
+
+### Test 9: Validation — Bad Inputs
+
+```bash
+# Missing "name" field
+curl -s -X POST http://localhost:8080/v1/workflows \
+  -H "Content-Type: application/json" \
+  -d '{"dag": {}}' 
+
+# Expected: 400 Bad Request — "name" is required
+
+# Invalid cron expression
+curl -s -X POST http://localhost:8080/v1/workflows/$WF_ID/schedules \
+  -H "Content-Type: application/json" \
+  -d '{"cronExpression": "not-a-cron"}'
+
+# Expected: 400 Bad Request — Invalid cron expression
+
+# Non-existent workflow ID
+curl -s http://localhost:8080/v1/workflows/00000000-0000-0000-0000-000000000000
+
+# Expected: 404 Not Found
+```
+
+### Test 10: Idempotency — Duplicate Webhook Trigger
+
+```bash
+# Send the SAME Idempotency-Key twice
+curl -s -X POST http://localhost:8080/webhooks/$WH_PATH \
+  -H "Idempotency-Key: test-run-001" \
+  -d '{"user": "John"}' | jq .
+
+# Expected: Should return the SAME executionId as Test 6 (not create a duplicate)
+```
+
+---
+
+## Summary of File Changes
+
+| File | Action | Description |
+|---|---|---|
+| `trigger-api/internal/workflows/handler.go` | **NEW** | HTTP handlers for all 7 endpoints + `generateRandomString` helper |
+| `trigger-api/internal/workflows/service.go` | **MODIFY** | Add `GetStore()` accessor (1 line) |
+| `trigger-api/cmd/api/main.go` | **MODIFY** | Replace 7 stubs with real handler calls, wire up `workflowHandler` |
+
+Total: **1 new file, 2 small modifications to existing files.**

@@ -73,3 +73,10 @@ FOR UPDATE SKIP LOCKED;
 UPDATE outbox_messages
 SET published_at = now()
 WHERE id = $1;
+
+-- name: IncrementEmailDispatchCount :one
+UPDATE workflow_runs
+SET email_dispatch_count = email_dispatch_count + 1
+WHERE execution_id = $1
+  AND email_dispatch_count < 100
+RETURNING email_dispatch_count;

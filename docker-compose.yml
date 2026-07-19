@@ -111,6 +111,7 @@ services:
     container_name: workflow_worker_pool
     environment:
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      SENDGRID_API_KEY: "${SENDGRID_API_KEY}"
     depends_on:
       rabbitmq:
         condition: service_healthy
