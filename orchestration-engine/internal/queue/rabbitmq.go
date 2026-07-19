@@ -145,7 +145,6 @@ func (r *RabbitMQ) PublishExecutionStatus(ctx context.Context, msg contracts.Exe
 }
 
 func (r *RabbitMQ) PublishRaw(ctx context.Context, queue string, body []byte) error {
-	confirms := r.ch.NotifyPublish(make(chan amqp.Confirmation, 1))
 	err := r.ch.PublishWithContext(
 		ctx,
 		"",
@@ -160,9 +159,6 @@ func (r *RabbitMQ) PublishRaw(ctx context.Context, queue string, body []byte) er
 	)
 	if err != nil {
 		return err
-	}
-	if confirmed := <-confirms; !confirmed.Ack {
-		return fmt.Errorf("failed to publish message to %s (not acked)", queue)
 	}
 	return nil
 }

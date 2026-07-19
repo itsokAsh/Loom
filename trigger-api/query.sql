@@ -71,3 +71,10 @@ WHERE workflow_id = $1
 AND (sqlc.narg('cursor')::timestamptz IS NULL OR created_at < sqlc.narg('cursor'))
 ORDER BY created_at DESC
 LIMIT $2;
+
+-- name: UpdateExecutionStatus :exec
+UPDATE executions
+SET status = $2,
+    updated_at = $3,
+    completed_at = COALESCE($4, completed_at)
+WHERE id = $1;

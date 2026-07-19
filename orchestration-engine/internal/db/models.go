@@ -47,4 +47,5 @@ type WorkflowRun struct {
 	StartedAt       pgtype.Timestamptz `json:"started_at"`
 	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	TriggerData     []byte             `json:"trigger_data"`
 }

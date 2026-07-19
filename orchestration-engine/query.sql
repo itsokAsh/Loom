@@ -1,8 +1,8 @@
 -- name: InsertWorkflowRun :exec
 INSERT INTO workflow_runs (
-    execution_id, workflow_id, workflow_version, dag_definition, status, started_at
+    execution_id, workflow_id, workflow_version, dag_definition, status, started_at, trigger_data
 ) VALUES (
-    $1, $2, $3, $4, $5, $6
+    $1, $2, $3, $4, $5, $6, $7
 ) ON CONFLICT (execution_id) DO NOTHING;
 
 -- name: GetWorkflowRun :one
@@ -28,6 +28,11 @@ WHERE execution_id = $1 AND node_id = $2;
 -- name: UpdateNodeExecutionStatus :exec
 UPDATE node_executions
 SET status = $3, output_data = $4, error_message = $5, updated_at = now(), completed_at = $6
+WHERE execution_id = $1 AND node_id = $2 AND status IN ('QUEUED', 'RUNNING');
+
+-- name: RecordNodeErrorAndRetry :exec
+UPDATE node_executions
+SET attempt_count = attempt_count + 1, error_message = $3, updated_at = now()
 WHERE execution_id = $1 AND node_id = $2 AND status IN ('QUEUED', 'RUNNING');
 
 -- name: ListAllNodeExecutions :many

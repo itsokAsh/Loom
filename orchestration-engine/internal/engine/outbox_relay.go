@@ -36,17 +36,6 @@ func (r *OutboxRelay) Start(ctx context.Context) {
 }
 
 func (r *OutboxRelay) processOutbox(ctx context.Context) {
-	// We want to lock the rows being published so multiple relays don't publish the same message.
-	// Since Store doesn't expose the raw pgxpool for arbitrary transactions easily,
-	// and WithRunLock requires a Workflow ID, we'll implement a standalone transaction block here.
-	
-	// Wait, we need a transaction to use FOR UPDATE SKIP LOCKED.
-	// Let's just add a generic WithTx to store if we don't have one, or do it via direct methods.
-	// We can use the Queries without Tx since we're just picking up rows and marking them? 
-	// Without Tx, FOR UPDATE SKIP LOCKED is released immediately. 
-	// We need a proper WithTx in store.
-	
-	// I'll assume we add WithTx to store.go in the next step.
 	err := r.store.WithTx(ctx, func(ctx context.Context, qtx *db.Queries) error {
 		msgs, err := qtx.ClaimUnpublishedMessages(ctx, 100)
 		if err != nil {
