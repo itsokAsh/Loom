@@ -11,6 +11,40 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimUnpublishedMessages = `-- name: ClaimUnpublishedMessages :many
+SELECT id, queue, payload, created_at, published_at FROM outbox_messages
+WHERE published_at IS NULL
+ORDER BY created_at ASC
+LIMIT $1
+FOR UPDATE SKIP LOCKED
+`
+
+func (q *Queries) ClaimUnpublishedMessages(ctx context.Context, limit int32) ([]OutboxMessage, error) {
+	rows, err := q.db.Query(ctx, claimUnpublishedMessages, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OutboxMessage
+	for rows.Next() {
+		var i OutboxMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.Queue,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.PublishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteDispatchedTask = `-- name: DeleteDispatchedTask :exec
 DELETE FROM dispatched_tasks
 WHERE execution_id = $1 AND node_id = $2
@@ -79,7 +113,7 @@ func (q *Queries) GetNodeExecution(ctx context.Context, arg GetNodeExecutionPara
 }
 
 const getWorkflowRun = `-- name: GetWorkflowRun :one
-SELECT execution_id, workflow_id, workflow_version, dag_definition, status, started_at, completed_at, updated_at FROM workflow_runs
+SELECT execution_id, workflow_id, workflow_version, dag_definition, status, started_at, completed_at, updated_at, trigger_data FROM workflow_runs
 WHERE execution_id = $1 FOR UPDATE
 `
 
@@ -95,6 +129,7 @@ func (q *Queries) GetWorkflowRun(ctx context.Context, executionID pgtype.UUID) (
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.UpdatedAt,
+		&i.TriggerData,
 	)
 	return i, err
 }
@@ -145,11 +180,26 @@ func (q *Queries) InsertNodeExecution(ctx context.Context, arg InsertNodeExecuti
 	return err
 }
 
+const insertOutboxMessage = `-- name: InsertOutboxMessage :exec
+INSERT INTO outbox_messages (queue, payload)
+VALUES ($1, $2)
+`
+
+type InsertOutboxMessageParams struct {
+	Queue   string `json:"queue"`
+	Payload []byte `json:"payload"`
+}
+
+func (q *Queries) InsertOutboxMessage(ctx context.Context, arg InsertOutboxMessageParams) error {
+	_, err := q.db.Exec(ctx, insertOutboxMessage, arg.Queue, arg.Payload)
+	return err
+}
+
 const insertWorkflowRun = `-- name: InsertWorkflowRun :exec
 INSERT INTO workflow_runs (
-    execution_id, workflow_id, workflow_version, dag_definition, status, started_at
+    execution_id, workflow_id, workflow_version, dag_definition, status, started_at, trigger_data
 ) VALUES (
-    $1, $2, $3, $4, $5, $6
+    $1, $2, $3, $4, $5, $6, $7
 ) ON CONFLICT (execution_id) DO NOTHING
 `
 
@@ -160,6 +210,7 @@ type InsertWorkflowRunParams struct {
 	DagDefinition   []byte             `json:"dag_definition"`
 	Status          string             `json:"status"`
 	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	TriggerData     []byte             `json:"trigger_data"`
 }
 
 func (q *Queries) InsertWorkflowRun(ctx context.Context, arg InsertWorkflowRunParams) error {
@@ -170,6 +221,7 @@ func (q *Queries) InsertWorkflowRun(ctx context.Context, arg InsertWorkflowRunPa
 		arg.DagDefinition,
 		arg.Status,
 		arg.StartedAt,
+		arg.TriggerData,
 	)
 	return err
 }
@@ -248,6 +300,34 @@ func (q *Queries) ListCompletedNodeExecutions(ctx context.Context, executionID p
 	return items, nil
 }
 
+const markOutboxMessagePublished = `-- name: MarkOutboxMessagePublished :exec
+UPDATE outbox_messages
+SET published_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) MarkOutboxMessagePublished(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, markOutboxMessagePublished, id)
+	return err
+}
+
+const recordNodeErrorAndRetry = `-- name: RecordNodeErrorAndRetry :exec
+UPDATE node_executions
+SET attempt_count = attempt_count + 1, error_message = $3, updated_at = now()
+WHERE execution_id = $1 AND node_id = $2 AND status IN ('QUEUED', 'RUNNING')
+`
+
+type RecordNodeErrorAndRetryParams struct {
+	ExecutionID  pgtype.UUID `json:"execution_id"`
+	NodeID       string      `json:"node_id"`
+	ErrorMessage pgtype.Text `json:"error_message"`
+}
+
+func (q *Queries) RecordNodeErrorAndRetry(ctx context.Context, arg RecordNodeErrorAndRetryParams) error {
+	_, err := q.db.Exec(ctx, recordNodeErrorAndRetry, arg.ExecutionID, arg.NodeID, arg.ErrorMessage)
+	return err
+}
+
 const updateNodeExecutionStatus = `-- name: UpdateNodeExecutionStatus :exec
 UPDATE node_executions
 SET status = $3, output_data = $4, error_message = $5, updated_at = now(), completed_at = $6
@@ -289,65 +369,5 @@ type UpdateWorkflowRunStatusParams struct {
 
 func (q *Queries) UpdateWorkflowRunStatus(ctx context.Context, arg UpdateWorkflowRunStatusParams) error {
 	_, err := q.db.Exec(ctx, updateWorkflowRunStatus, arg.ExecutionID, arg.Status, arg.CompletedAt)
-	return err
-}
-
-const insertOutboxMessage = `-- name: InsertOutboxMessage :exec
-INSERT INTO outbox_messages (queue, payload)
-VALUES ($1, $2)
-`
-
-type InsertOutboxMessageParams struct {
-	Queue   string `json:"queue"`
-	Payload []byte `json:"payload"`
-}
-
-func (q *Queries) InsertOutboxMessage(ctx context.Context, arg InsertOutboxMessageParams) error {
-	_, err := q.db.Exec(ctx, insertOutboxMessage, arg.Queue, arg.Payload)
-	return err
-}
-
-const claimUnpublishedMessages = `-- name: ClaimUnpublishedMessages :many
-SELECT id, queue, payload, created_at, published_at FROM outbox_messages
-WHERE published_at IS NULL
-ORDER BY created_at ASC
-LIMIT $1
-FOR UPDATE SKIP LOCKED
-`
-
-func (q *Queries) ClaimUnpublishedMessages(ctx context.Context, limit int32) ([]OutboxMessage, error) {
-	rows, err := q.db.Query(ctx, claimUnpublishedMessages, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []OutboxMessage
-	for rows.Next() {
-		var i OutboxMessage
-		if err := rows.Scan(
-			&i.ID,
-			&i.Queue,
-			&i.Payload,
-			&i.CreatedAt,
-			&i.PublishedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const markOutboxMessagePublished = `-- name: MarkOutboxMessagePublished :exec
-UPDATE outbox_messages
-SET published_at = now()
-WHERE id = $1
-`
-
-func (q *Queries) MarkOutboxMessagePublished(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, markOutboxMessagePublished, id)
 	return err
 }

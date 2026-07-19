@@ -372,3 +372,28 @@ func (q *Queries) UpdateScheduleNextRun(ctx context.Context, arg UpdateScheduleN
 	_, err := q.db.Exec(ctx, updateScheduleNextRun, arg.ID, arg.NextRunAt)
 	return err
 }
+
+const updateExecutionStatus = `-- name: UpdateExecutionStatus :exec
+UPDATE executions
+SET status = $2,
+    updated_at = $3,
+    completed_at = COALESCE($4, completed_at)
+WHERE id = $1
+`
+
+type UpdateExecutionStatusParams struct {
+	ID          pgtype.UUID
+	Status      string
+	UpdatedAt   pgtype.Timestamptz
+	CompletedAt pgtype.Timestamptz
+}
+
+func (q *Queries) UpdateExecutionStatus(ctx context.Context, arg UpdateExecutionStatusParams) error {
+	_, err := q.db.Exec(ctx, updateExecutionStatus,
+		arg.ID,
+		arg.Status,
+		arg.UpdatedAt,
+		arg.CompletedAt,
+	)
+	return err
+}

@@ -1,0 +1,16 @@
+{
+  "name": "test-workflow",
+  "dag": {
+    "nodes": [
+      {
+        "id": "node1",
+        "type": "HTTP",
+        "config": {
+          "url": "http://example.com",
+          "method": "GET"
+        }
+      }
+    ],
+    "edges": []
+  }
+}

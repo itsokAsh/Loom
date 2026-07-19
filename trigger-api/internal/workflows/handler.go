@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"math/big"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/loom/trigger-api/internal/db"
+	contracts "github.com/loom/shared/queue-contracts"
 	"github.com/robfig/cron/v3"
 )
 
@@ -228,4 +230,25 @@ func generateRandomString(n int) string {
 		ret[i] = letters[num.Int64()]
 	}
 	return string(ret)
+}
+
+func NewStatusHandler(store *db.Store) func(context.Context, contracts.ExecutionStatusMessage) error {
+	return func(ctx context.Context, msg contracts.ExecutionStatusMessage) error {
+		var execID pgtype.UUID
+		if err := execID.Scan(msg.ExecutionID); err != nil {
+			return err
+		}
+
+		var completedAt pgtype.Timestamptz
+		if msg.CompletedAt != nil {
+			completedAt = pgtype.Timestamptz{Time: *msg.CompletedAt, Valid: true}
+		}
+
+		return store.UpdateExecutionStatus(ctx, db.UpdateExecutionStatusParams{
+			ID:          execID,
+			Status:      msg.Status,
+			UpdatedAt:   pgtype.Timestamptz{Time: msg.UpdatedAt, Valid: true},
+			CompletedAt: completedAt,
+		})
+	}
 }

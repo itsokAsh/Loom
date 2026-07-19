@@ -48,6 +48,18 @@ func main() {
 	webhookHandler := webhooks.NewHandler(store, publisher)
 	schedulePoller := schedules.NewPoller(store, publisher)
 
+	consumer, err := queue.NewConsumer(rmqURL, "orchestration-to-trigger-status")
+	if err != nil {
+		log.Fatalf("Failed to create status consumer: %v", err)
+	}
+	defer consumer.Close()
+
+	go func() {
+		if err := consumer.Start(ctx, workflows.NewStatusHandler(store)); err != nil {
+			log.Printf("Status consumer error: %v", err)
+		}
+	}()
+
 	go schedulePoller.Start(ctx)
 
 	r := chi.NewRouter()
