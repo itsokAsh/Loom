@@ -229,7 +229,7 @@ func InitLoom() {
 **2. Use it in your API Endpoint (e.g., `routes/register.go`)**
 Now, just import your configured client and call `.Trigger()` inside your POST requests. 
 
-**Best Practice (Fire-and-Forget):** We wrap the trigger call in a Go routine (`go func()`). This means your API instantly returns a `201 Created` response to your user in under 1 millisecond. Your API never waits for the network round-trip to Loom, and Loom never waits for SendGrid. It is a completely non-blocking, async architecture.
+**Best Practice (Fire-and-Forget):** We wrap the trigger call in a Go routine (`go func()`). This means your API instantly returns a `201 Created` response to your user in under 1 millisecond. Your API never waits on network latency, because Loom's robust queueing system reliably handles the SendGrid delivery, timeouts, and retries entirely in the background.
 
 ```go
 package routes
