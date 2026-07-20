@@ -180,11 +180,24 @@ Loom will instantly generate a highly secure, random `path` and `secret` for you
 
 ---
 
-### 3. Triggering via SDK (Go Example)
+### 3. Integrating the SDK into Your Project
 
-Now, hop over to your actual backend application (for example, your Login API code). Instead of manually sending emails and dealing with network timeouts, you just tell Loom to do it!
+Now it's time to trigger this workflow from your *own* backend application (e.g., your Login API). 
 
-Import the Loom SDK into your Go project:
+**Install the SDK:**
+In your backend project, install the Loom SDK via your package manager:
+
+*For Go:*
+```bash
+go get github.com/EgyptianMama/Loom/sdk/go
+```
+*For Python:*
+```bash
+pip install git+https://github.com/EgyptianMama/Loom.git#subdirectory=sdk/python
+```
+
+**Write the Code:**
+Create a new file in your project (e.g., `main.go`) and add the following code. Instead of manually dealing with email APIs and network timeouts, you just tell Loom to do it!
 
 ```go
 package main
