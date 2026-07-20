@@ -197,43 +197,71 @@ pip install git+https://github.com/EgyptianMama/Loom.git#subdirectory=sdk/python
 ```
 
 **Write the Code:**
-Create a new file in your project (e.g., `main.go`) and add the following code. Instead of manually dealing with email APIs and network timeouts, you just tell Loom to do it!
+Here is a real-world example of how to integrate the Loom SDK directly into your own backend API (like a user registration endpoint). 
+
+Create a file (e.g., `main.go`) and add the following code:
 
 ```go
 package main
 
 import (
-	"context"
-	"fmt"
+	"encoding/json"
+	"log"
+	"net/http"
+
 	"github.com/loom/sdk-go/loom"
 )
 
 func main() {
-    // 1. Initialize the client using the Path and Secret you generated in Step 2.
-	client, err := loom.NewWebhookClient(
+	// 1. Initialize the client ONCE when your server starts up.
+	// Use the Path and Secret you generated in Step 2.
+	loomClient, err := loom.NewWebhookClient(
 		"http://localhost:8080/v1",
 		"x8f9b2a1q3z",                     // YOUR_WEBHOOK_PATH
 		"u8J3kP9mN2qR4sT5vW6xY7zA8bC9dE0f", // YOUR_WEBHOOK_SECRET
 	)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to initialize Loom: %v", err)
 	}
 
-    // 2. Trigger the workflow! 
-    // The SDK automatically signs this payload with your secret so the Loom server trusts it.
-    // Notice how the 'email' and 'name' map directly to the {{trigger.data.*}} variables in your workflow!
-	err = client.Trigger(context.Background(), map[string]interface{}{
-		"email": "newuser@example.com",
-		"name":  "Alice",
+	// 2. Your actual API Endpoint (e.g., a user signing up for your app)
+	http.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		// (Normally you would save the user to your own database here...)
+
+		// 3. Trigger the workflow in the background!
+		// Loom securely signs this payload and handles the email delivery, 
+		// retries, and network timeouts so your API stays blazingly fast.
+		err := loomClient.Trigger(r.Context(), map[string]interface{}{
+			"email": "newuser@example.com",
+			"name":  "Alice",
+		})
+
+		if err != nil {
+			http.Error(w, "Registration successful, but failed to trigger onboarding.", http.StatusInternalServerError)
+			return
+		}
+
+		// 4. Immediately return success to the user!
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "User registered successfully! Welcome email is on the way.",
+		})
 	})
-	
-	if err != nil {
-	    fmt.Println("Failed to trigger workflow:", err)
-	} else {
-	    fmt.Println("Success! Loom will reliably deliver the email in the background.")
-	}
+
+	log.Println("Your Login API is running on :3000")
+	log.Fatal(http.ListenAndServe(":3000", nil))
 }
 ```
+
+Now, run your backend API:
+```bash
+go run main.go
+```
+And test it by hitting your own endpoint:
+```bash
+curl -X POST http://localhost:3000/register
+```
+*(You will instantly get a success response, while Loom reliably delivers the welcome email in the background!)*
 
 ---
 
