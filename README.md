@@ -119,8 +119,12 @@ docker-compose up -d
 
 Once Loom is running on your servers, your backend applications communicate with it using our official SDKs. 
 
-### Creating a Workflow
-First, define a workflow and generate a secure Webhook path and secret:
+### 1. Create a Workflow Definition
+
+First, you need to tell Loom what exactly you want to happen when a workflow is triggered. You do this by defining a DAG (Directed Acyclic Graph) of nodes. 
+
+Let's create a workflow that sends a "Welcome" email. Run this in your terminal:
+
 ```bash
 curl -X POST http://localhost:8080/v1/workflows \
   -H "Content-Type: application/json" \
@@ -139,35 +143,82 @@ curl -X POST http://localhost:8080/v1/workflows \
       "edges": []
     }
   }'
+```
 
-# Using the returned ID, generate the Webhook credentials:
+**What happens next?** 
+Loom saves this workflow and replies with an ID. It will look like this:
+```json
+{
+  "id": "123e4567-e89b-12d3-a456-426614174000",
+  "name": "User Onboarding"
+}
+```
+*Copy that `id` string—you will need it for the next step!*
+
+---
+
+### 2. Generate Secure Webhook Credentials
+
+Now that Loom knows *what* to do, it needs a secure way for your application to trigger it. We create a **Webhook** attached to your new workflow ID.
+
+Run this command, replacing `YOUR_WORKFLOW_ID` with the ID you copied above:
+
+```bash
 curl -X POST http://localhost:8080/v1/workflows/YOUR_WORKFLOW_ID/webhooks
 ```
 
-### Triggering via SDK (Go Example)
-In your actual backend application (e.g., your Login/Registration API), import the Loom SDK:
+**The Response:**
+Loom will instantly generate a highly secure, random `path` and `secret` for you:
+```json
+{
+  "path": "x8f9b2a1q3z",
+  "secret": "u8J3kP9mN2qR4sT5vW6xY7zA8bC9dE0f"
+}
+```
+- **path**: The endpoint URL your SDK will use to trigger the workflow.
+- **secret**: A cryptographic key your SDK will use to sign requests. **Keep this safe!** Without it, nobody can trigger your workflow.
+
+---
+
+### 3. Triggering via SDK (Go Example)
+
+Now, hop over to your actual backend application (for example, your Login API code). Instead of manually sending emails and dealing with network timeouts, you just tell Loom to do it!
+
+Import the Loom SDK into your Go project:
 
 ```go
 package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/loom/sdk-go/loom"
 )
 
 func main() {
-    // 1. Initialize client with your generated Path and Secret
-	client, _ := loom.NewWebhookClient(
+    // 1. Initialize the client using the Path and Secret you generated in Step 2.
+	client, err := loom.NewWebhookClient(
 		"http://localhost:8080/v1",
-		"YOUR_WEBHOOK_PATH",
-		"YOUR_WEBHOOK_SECRET",
+		"x8f9b2a1q3z",                     // YOUR_WEBHOOK_PATH
+		"u8J3kP9mN2qR4sT5vW6xY7zA8bC9dE0f", // YOUR_WEBHOOK_SECRET
 	)
+	if err != nil {
+		panic(err)
+	}
 
-    // 2. Trigger it safely! The SDK handles HMAC signing and Idempotency generation.
-	client.Trigger(context.Background(), map[string]interface{}{
+    // 2. Trigger the workflow! 
+    // The SDK automatically signs this payload with your secret so the Loom server trusts it.
+    // Notice how the 'email' and 'name' map directly to the {{trigger.data.*}} variables in your workflow!
+	err = client.Trigger(context.Background(), map[string]interface{}{
 		"email": "newuser@example.com",
 		"name":  "Alice",
 	})
+	
+	if err != nil {
+	    fmt.Println("Failed to trigger workflow:", err)
+	} else {
+	    fmt.Println("Success! Loom will reliably deliver the email in the background.")
+	}
 }
 ```
 
