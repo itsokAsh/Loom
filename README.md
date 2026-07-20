@@ -227,12 +227,16 @@ func InitLoom() {
 ```
 
 **2. Use it in your API Endpoint (e.g., `routes/register.go`)**
-Now, just import your configured client and call `.Trigger()` inside your POST requests!
+Now, just import your configured client and call `.Trigger()` inside your POST requests. 
+
+**Best Practice (Fire-and-Forget):** We wrap the trigger call in a Go routine (`go func()`). This means your API instantly returns a `201 Created` response to your user in under 1 millisecond. Your API never waits for the network round-trip to Loom, and Loom never waits for SendGrid. It is a completely non-blocking, async architecture.
 
 ```go
 package routes
 
 import (
+	"context"
+	"log"
 	"net/http"
 	"yourproject/config" // Import your config!
 )
@@ -244,20 +248,21 @@ func HandleUserRegistration(w http.ResponseWriter, r *http.Request) {
 
 	// (Normally you would save the user to your own database here...)
 
-	// Trigger the workflow in the background!
-	// Loom securely signs this payload and handles the email delivery, 
-	// retries, and network timeouts so your API stays blazingly fast.
-	err := config.LoomClient.Trigger(r.Context(), map[string]interface{}{
-		"email": "newuser@example.com",
-		"name":  "Alice",
-	})
+	// Trigger the workflow in a background goroutine!
+	// This makes it a 100% "fire-and-forget" operation. Your API won't block for even a millisecond.
+	go func() {
+		// Loom securely signs this payload and handles the email delivery, 
+		// retries, and network timeouts.
+		err := config.LoomClient.Trigger(context.Background(), map[string]interface{}{
+			"email": "newuser@example.com",
+			"name":  "Alice",
+		})
+		if err != nil {
+			log.Printf("Failed to trigger Loom workflow: %v", err)
+		}
+	}()
 
-	if err != nil {
-		http.Error(w, "Failed to trigger onboarding.", http.StatusInternalServerError)
-		return
-	}
-
-	// Immediately return success to the user!
+	// Immediately return success to the user! The email is on its way.
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(`{"message": "User registered! Welcome email is on the way."}`))
 }
