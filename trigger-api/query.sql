@@ -1,12 +1,12 @@
 -- name: CreateWorkflow :one
 INSERT INTO workflows (name)
 VALUES ($1)
-RETURNING id, name, created_at;
+RETURNING *;
 
 -- name: CreateWorkflowVersion :one
 INSERT INTO workflow_versions (workflow_id, version, dag_definition)
 VALUES ($1, $2, $3)
-RETURNING workflow_id, version, dag_definition, created_at;
+RETURNING *;
 
 -- name: GetWorkflow :one
 SELECT * FROM workflows
@@ -24,7 +24,7 @@ ORDER BY version DESC LIMIT 1;
 -- name: CreateWebhook :one
 INSERT INTO webhooks (workflow_id, path, secret)
 VALUES ($1, $2, $3)
-RETURNING id, workflow_id, path, secret, created_at;
+RETURNING *;
 
 -- name: GetWebhookByPath :one
 SELECT * FROM webhooks
@@ -33,7 +33,7 @@ WHERE path = $1 LIMIT 1;
 -- name: CreateSchedule :one
 INSERT INTO schedules (workflow_id, cron_expression, next_run_at)
 VALUES ($1, $2, $3)
-RETURNING id, workflow_id, cron_expression, next_run_at, created_at;
+RETURNING *;
 
 -- name: ClaimDueSchedules :many
 UPDATE schedules
@@ -55,7 +55,7 @@ WHERE id = $1;
 INSERT INTO executions (workflow_id, workflow_version, idempotency_key, status)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (workflow_id, idempotency_key) DO NOTHING
-RETURNING id, workflow_id, workflow_version, idempotency_key, status, started_at, completed_at, created_at, updated_at;
+RETURNING *;
 
 -- name: GetExecutionByWorkflowAndIdempotencyKey :one
 SELECT * FROM executions
@@ -78,3 +78,33 @@ SET status = $2,
     updated_at = $3,
     completed_at = COALESCE($4, completed_at)
 WHERE id = $1;
+
+-- Template-related queries
+
+-- name: CreateWorkflowFromTemplate :one
+INSERT INTO workflows (name, fingerprint, template_id, template_version)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+
+-- name: FindWorkflowByFingerprint :one
+SELECT * FROM workflows
+WHERE fingerprint = $1 LIMIT 1;
+
+-- name: GetWebhookByWorkflowID :one
+SELECT * FROM webhooks
+WHERE workflow_id = $1 LIMIT 1;
+
+-- name: SaveIdempotentExecution :one
+INSERT INTO webhook_idempotency (webhook_id, idempotency_key, execution_id, created_at, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (webhook_id, idempotency_key) DO NOTHING
+RETURNING *;
+
+-- name: GetIdempotentExecution :one
+SELECT execution_id FROM webhook_idempotency
+WHERE webhook_id = $1 AND idempotency_key = $2 AND expires_at > NOW()
+LIMIT 1;
+
+-- name: CleanupExpiredIdempotencyKeys :exec
+DELETE FROM webhook_idempotency
+WHERE expires_at < NOW();

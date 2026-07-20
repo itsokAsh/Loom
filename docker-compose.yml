@@ -68,6 +68,16 @@ services:
       postgres:
         condition: service_healthy
 
+  worker-migrations:
+    image: migrate/migrate
+    container_name: workflow_worker_migrations
+    volumes:
+      - ./node-worker-pool/migrations:/migrations
+    command: ["-path", "/migrations", "-database", "postgres://postgres:postgres_password@postgres:5432/worker_db?sslmode=disable", "up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   trigger-api:
     build:
       context: .
@@ -102,6 +112,11 @@ services:
         condition: service_healthy
       orchestration-migrations:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
   node-worker-pool:
@@ -110,11 +125,21 @@ services:
       dockerfile: node-worker-pool/Dockerfile
     container_name: workflow_worker_pool
     environment:
+      DATABASE_URL: "postgres://postgres:postgres_password@postgres:5432/worker_db?sslmode=disable"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
       SENDGRID_API_KEY: "${SENDGRID_API_KEY}"
     depends_on:
       rabbitmq:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      worker-migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
 volumes:

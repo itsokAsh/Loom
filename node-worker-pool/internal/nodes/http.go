@@ -1,13 +1,11 @@
 package nodes
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"time"
+
+	"github.com/loom/node-worker-pool/internal/executor"
 )
 
 func init() {
@@ -15,7 +13,7 @@ func init() {
 }
 
 type HTTPExecutor struct {
-	client *http.Client
+	engine *executor.HardenedHTTPEngine
 }
 
 type HTTPConfig struct {
@@ -26,8 +24,8 @@ type HTTPConfig struct {
 }
 
 func (e *HTTPExecutor) Execute(ctx context.Context, config json.RawMessage) (json.RawMessage, error) {
-	if e.client == nil {
-		e.client = &http.Client{Timeout: 30 * time.Second}
+	if e.engine == nil {
+		e.engine = executor.NewHardenedHTTPEngine()
 	}
 
 	var reqConfig HTTPConfig
@@ -35,49 +33,43 @@ func (e *HTTPExecutor) Execute(ctx context.Context, config json.RawMessage) (jso
 		return nil, fmt.Errorf("invalid HTTP node config: %w", err)
 	}
 
-	var bodyReader io.Reader
+	var bodyBytes []byte
+	var err error
 	if reqConfig.Body != nil {
-		bodyBytes, err := json.Marshal(reqConfig.Body)
+		bodyBytes, err = json.Marshal(reqConfig.Body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
-		bodyReader = bytes.NewReader(bodyBytes)
 	}
 
 	method := reqConfig.Method
 	if method == "" {
 		method = "GET"
 	}
+	
+	if reqConfig.Headers == nil {
+		reqConfig.Headers = make(map[string]string)
+	}
+	
+	if reqConfig.Body != nil && reqConfig.Headers["Content-Type"] == "" {
+		reqConfig.Headers["Content-Type"] = "application/json"
+	}
 
-	req, err := http.NewRequestWithContext(ctx, method, reqConfig.URL, bodyReader)
+	req := executor.Request{
+		Method:  method,
+		URL:     reqConfig.URL,
+		Headers: reqConfig.Headers,
+		Body:    bodyBytes,
+	}
+
+	resp, err := e.engine.Execute(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 
-	for k, v := range reqConfig.Headers {
-		req.Header.Set(k, v)
-	}
-
-	// Default to JSON if body exists and content-type isn't set
-	if reqConfig.Body != nil && req.Header.Get("Content-Type") == "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := e.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	// Attempt to parse response body as JSON, if it fails, return as a string
 	var parsedBody interface{}
-	if err := json.Unmarshal(respBody, &parsedBody); err != nil {
-		parsedBody = string(respBody)
+	if err := json.Unmarshal(resp.Body, &parsedBody); err != nil {
+		parsedBody = string(resp.Body)
 	}
 
 	result := map[string]interface{}{

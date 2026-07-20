@@ -38,10 +38,21 @@ type Webhook struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type WebhookIdempotency struct {
+	WebhookID      pgtype.UUID
+	IdempotencyKey string
+	ExecutionID    pgtype.UUID
+	CreatedAt      pgtype.Timestamptz
+	ExpiresAt      pgtype.Timestamptz
+}
+
 type Workflow struct {
-	ID        pgtype.UUID
-	Name      string
-	CreatedAt pgtype.Timestamptz
+	ID              pgtype.UUID
+	Name            string
+	CreatedAt       pgtype.Timestamptz
+	Fingerprint     pgtype.Text
+	TemplateID      pgtype.Text
+	TemplateVersion pgtype.Int4
 }
 
 type WorkflowVersion struct {

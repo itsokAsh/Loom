@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/loom/trigger-api/internal/db"
+	"github.com/loom/trigger-api/internal/middleware"
 	"github.com/loom/trigger-api/internal/queue"
 	"github.com/loom/trigger-api/internal/schedules"
+	"github.com/loom/trigger-api/internal/templates"
 	"github.com/loom/trigger-api/internal/webhooks"
 	"github.com/loom/trigger-api/internal/workflows"
 )
@@ -44,9 +46,12 @@ func main() {
 
 	workflowService := workflows.NewService(store)
 	workflowHandler := workflows.NewHandler(workflowService, store)
-
+	
+	templateHandler := templates.NewTemplateHandler(templates.NewStoreAdapter(store), "http://localhost:8080/v1")
 	webhookHandler := webhooks.NewHandler(store, publisher)
 	schedulePoller := schedules.NewPoller(store, publisher)
+
+	rateLimiter := middleware.NewWebhookRateLimiter()
 
 	consumer, err := queue.NewConsumer(rmqURL, "orchestration-to-trigger-status")
 	if err != nil {
@@ -63,29 +68,57 @@ func main() {
 	go schedulePoller.Start(ctx)
 
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	r.Use(chimiddleware.Logger)
+	r.Use(chimiddleware.Recoverer)
+	r.Use(chimiddleware.Timeout(60 * time.Second))
 
-	r.Post("/webhooks/{path}", webhookHandler.HandleIncomingWebhook)
-
-	r.Route("/v1", func(r chi.Router) {
-		r.Post("/workflows", workflowHandler.CreateWorkflow)
-		r.Post("/workflows/{id}/versions", workflowHandler.AddVersion)
-		r.Get("/workflows/{id}", workflowHandler.GetWorkflow)
-		r.Post("/workflows/{id}/webhooks", workflowHandler.CreateWebhook)
-		r.Post("/workflows/{id}/schedules", workflowHandler.CreateSchedule)
-		r.Get("/workflows/{id}/executions", workflowHandler.ListExecutions)
-		r.Get("/executions/{id}", workflowHandler.GetExecution)
+	// Old webhook endpoint deprecation redirect
+	r.Post("/webhooks/{path}", func(w http.ResponseWriter, r *http.Request) {
+		path := chi.URLParam(r, "path")
+		http.Redirect(w, r, "/v1/webhooks/"+path, http.StatusPermanentRedirect)
 	})
 
+	r.Route("/v1", func(r chi.Router) {
+		// Webhook trigger route
+		r.With(
+			middleware.WebhookAuthMiddleware(store),
+			rateLimiter.Middleware(),
+		).Post("/webhooks/{path}", webhookHandler.HandleIncomingWebhook)
+
+		// Management routes protected by API key
+		r.Group(func(r chi.Router) {
+			adminKey := os.Getenv("ADMIN_API_KEY")
+			if adminKey == "" {
+				adminKey = "dev-admin-key" // Default for local dev
+			}
+			r.Use(middleware.AdminAPIKeyMiddleware(adminKey))
+
+			r.Post("/workflows", workflowHandler.CreateWorkflow)
+			r.Post("/workflows/{id}/versions", workflowHandler.AddVersion)
+			r.Get("/workflows/{id}", workflowHandler.GetWorkflow)
+			r.Post("/workflows/{id}/webhooks", workflowHandler.CreateWebhook)
+			r.Post("/workflows/{id}/schedules", workflowHandler.CreateSchedule)
+			r.Get("/workflows/{id}/executions", workflowHandler.ListExecutions)
+			r.Get("/executions/{id}", workflowHandler.GetExecution)
+			
+			// Templates
+			r.Get("/templates", templateHandler.ListTemplates)
+			r.Post("/templates/{id}/create", templateHandler.CreateFromTemplate)
+		})
+	})
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
 	srv := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":" + port,
 		Handler: r,
 	}
 
 	go func() {
-		log.Println("Starting Trigger/API Service on :8080")
+		log.Println("Starting Trigger/API Service on :" + port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP server failed: %v", err)
 		}

@@ -63,6 +63,16 @@ func (q *Queries) ClaimDueSchedules(ctx context.Context, arg ClaimDueSchedulesPa
 	return items, nil
 }
 
+const cleanupExpiredIdempotencyKeys = `-- name: CleanupExpiredIdempotencyKeys :exec
+DELETE FROM webhook_idempotency
+WHERE expires_at < NOW()
+`
+
+func (q *Queries) CleanupExpiredIdempotencyKeys(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, cleanupExpiredIdempotencyKeys)
+	return err
+}
+
 const createExecution = `-- name: CreateExecution :one
 INSERT INTO executions (workflow_id, workflow_version, idempotency_key, status)
 VALUES ($1, $2, $3, $4)
@@ -102,7 +112,7 @@ func (q *Queries) CreateExecution(ctx context.Context, arg CreateExecutionParams
 const createSchedule = `-- name: CreateSchedule :one
 INSERT INTO schedules (workflow_id, cron_expression, next_run_at)
 VALUES ($1, $2, $3)
-RETURNING id, workflow_id, cron_expression, next_run_at, created_at
+RETURNING id, workflow_id, cron_expression, next_run_at, leased_by, lease_expires_at, created_at
 `
 
 type CreateScheduleParams struct {
@@ -111,22 +121,16 @@ type CreateScheduleParams struct {
 	NextRunAt      pgtype.Timestamptz
 }
 
-type CreateScheduleRow struct {
-	ID             pgtype.UUID
-	WorkflowID     pgtype.UUID
-	CronExpression string
-	NextRunAt      pgtype.Timestamptz
-	CreatedAt      pgtype.Timestamptz
-}
-
-func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) (CreateScheduleRow, error) {
+func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) (Schedule, error) {
 	row := q.db.QueryRow(ctx, createSchedule, arg.WorkflowID, arg.CronExpression, arg.NextRunAt)
-	var i CreateScheduleRow
+	var i Schedule
 	err := row.Scan(
 		&i.ID,
 		&i.WorkflowID,
 		&i.CronExpression,
 		&i.NextRunAt,
+		&i.LeasedBy,
+		&i.LeaseExpiresAt,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -160,13 +164,54 @@ func (q *Queries) CreateWebhook(ctx context.Context, arg CreateWebhookParams) (W
 const createWorkflow = `-- name: CreateWorkflow :one
 INSERT INTO workflows (name)
 VALUES ($1)
-RETURNING id, name, created_at
+RETURNING id, name, created_at, fingerprint, template_id, template_version
 `
 
 func (q *Queries) CreateWorkflow(ctx context.Context, name string) (Workflow, error) {
 	row := q.db.QueryRow(ctx, createWorkflow, name)
 	var i Workflow
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.Fingerprint,
+		&i.TemplateID,
+		&i.TemplateVersion,
+	)
+	return i, err
+}
+
+const createWorkflowFromTemplate = `-- name: CreateWorkflowFromTemplate :one
+
+INSERT INTO workflows (name, fingerprint, template_id, template_version)
+VALUES ($1, $2, $3, $4)
+RETURNING id, name, created_at, fingerprint, template_id, template_version
+`
+
+type CreateWorkflowFromTemplateParams struct {
+	Name            string
+	Fingerprint     pgtype.Text
+	TemplateID      pgtype.Text
+	TemplateVersion pgtype.Int4
+}
+
+// Template-related queries
+func (q *Queries) CreateWorkflowFromTemplate(ctx context.Context, arg CreateWorkflowFromTemplateParams) (Workflow, error) {
+	row := q.db.QueryRow(ctx, createWorkflowFromTemplate,
+		arg.Name,
+		arg.Fingerprint,
+		arg.TemplateID,
+		arg.TemplateVersion,
+	)
+	var i Workflow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.Fingerprint,
+		&i.TemplateID,
+		&i.TemplateVersion,
+	)
 	return i, err
 }
 
@@ -190,6 +235,25 @@ func (q *Queries) CreateWorkflowVersion(ctx context.Context, arg CreateWorkflowV
 		&i.Version,
 		&i.DagDefinition,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const findWorkflowByFingerprint = `-- name: FindWorkflowByFingerprint :one
+SELECT id, name, created_at, fingerprint, template_id, template_version FROM workflows
+WHERE fingerprint = $1 LIMIT 1
+`
+
+func (q *Queries) FindWorkflowByFingerprint(ctx context.Context, fingerprint pgtype.Text) (Workflow, error) {
+	row := q.db.QueryRow(ctx, findWorkflowByFingerprint, fingerprint)
+	var i Workflow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.Fingerprint,
+		&i.TemplateID,
+		&i.TemplateVersion,
 	)
 	return i, err
 }
@@ -243,6 +307,42 @@ func (q *Queries) GetExecutionByWorkflowAndIdempotencyKey(ctx context.Context, a
 	return i, err
 }
 
+const getIdempotentExecution = `-- name: GetIdempotentExecution :one
+SELECT execution_id FROM webhook_idempotency
+WHERE webhook_id = $1 AND idempotency_key = $2 AND expires_at > NOW()
+LIMIT 1
+`
+
+type GetIdempotentExecutionParams struct {
+	WebhookID      pgtype.UUID
+	IdempotencyKey string
+}
+
+func (q *Queries) GetIdempotentExecution(ctx context.Context, arg GetIdempotentExecutionParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getIdempotentExecution, arg.WebhookID, arg.IdempotencyKey)
+	var execution_id pgtype.UUID
+	err := row.Scan(&execution_id)
+	return execution_id, err
+}
+
+const getLatestWorkflowVersion = `-- name: GetLatestWorkflowVersion :one
+SELECT workflow_id, version, dag_definition, created_at FROM workflow_versions
+WHERE workflow_id = $1
+ORDER BY version DESC LIMIT 1
+`
+
+func (q *Queries) GetLatestWorkflowVersion(ctx context.Context, workflowID pgtype.UUID) (WorkflowVersion, error) {
+	row := q.db.QueryRow(ctx, getLatestWorkflowVersion, workflowID)
+	var i WorkflowVersion
+	err := row.Scan(
+		&i.WorkflowID,
+		&i.Version,
+		&i.DagDefinition,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getWebhookByPath = `-- name: GetWebhookByPath :one
 SELECT id, workflow_id, path, secret, created_at FROM webhooks
 WHERE path = $1 LIMIT 1
@@ -261,15 +361,40 @@ func (q *Queries) GetWebhookByPath(ctx context.Context, path string) (Webhook, e
 	return i, err
 }
 
+const getWebhookByWorkflowID = `-- name: GetWebhookByWorkflowID :one
+SELECT id, workflow_id, path, secret, created_at FROM webhooks
+WHERE workflow_id = $1 LIMIT 1
+`
+
+func (q *Queries) GetWebhookByWorkflowID(ctx context.Context, workflowID pgtype.UUID) (Webhook, error) {
+	row := q.db.QueryRow(ctx, getWebhookByWorkflowID, workflowID)
+	var i Webhook
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.Path,
+		&i.Secret,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getWorkflow = `-- name: GetWorkflow :one
-SELECT id, name, created_at FROM workflows
+SELECT id, name, created_at, fingerprint, template_id, template_version FROM workflows
 WHERE id = $1 LIMIT 1
 `
 
 func (q *Queries) GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, error) {
 	row := q.db.QueryRow(ctx, getWorkflow, id)
 	var i Workflow
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.Fingerprint,
+		&i.TemplateID,
+		&i.TemplateVersion,
+	)
 	return i, err
 }
 
@@ -285,24 +410,6 @@ type GetWorkflowVersionParams struct {
 
 func (q *Queries) GetWorkflowVersion(ctx context.Context, arg GetWorkflowVersionParams) (WorkflowVersion, error) {
 	row := q.db.QueryRow(ctx, getWorkflowVersion, arg.WorkflowID, arg.Version)
-	var i WorkflowVersion
-	err := row.Scan(
-		&i.WorkflowID,
-		&i.Version,
-		&i.DagDefinition,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const getLatestWorkflowVersion = `-- name: GetLatestWorkflowVersion :one
-SELECT workflow_id, version, dag_definition, created_at FROM workflow_versions
-WHERE workflow_id = $1
-ORDER BY version DESC LIMIT 1
-`
-
-func (q *Queries) GetLatestWorkflowVersion(ctx context.Context, workflowID pgtype.UUID) (WorkflowVersion, error) {
-	row := q.db.QueryRow(ctx, getLatestWorkflowVersion, workflowID)
 	var i WorkflowVersion
 	err := row.Scan(
 		&i.WorkflowID,
@@ -357,20 +464,38 @@ func (q *Queries) ListExecutions(ctx context.Context, arg ListExecutionsParams) 
 	return items, nil
 }
 
-const updateScheduleNextRun = `-- name: UpdateScheduleNextRun :exec
-UPDATE schedules
-SET next_run_at = $2, leased_by = NULL, lease_expires_at = NULL
-WHERE id = $1
+const saveIdempotentExecution = `-- name: SaveIdempotentExecution :one
+INSERT INTO webhook_idempotency (webhook_id, idempotency_key, execution_id, created_at, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (webhook_id, idempotency_key) DO NOTHING
+RETURNING webhook_id, idempotency_key, execution_id, created_at, expires_at
 `
 
-type UpdateScheduleNextRunParams struct {
-	ID        pgtype.UUID
-	NextRunAt pgtype.Timestamptz
+type SaveIdempotentExecutionParams struct {
+	WebhookID      pgtype.UUID
+	IdempotencyKey string
+	ExecutionID    pgtype.UUID
+	CreatedAt      pgtype.Timestamptz
+	ExpiresAt      pgtype.Timestamptz
 }
 
-func (q *Queries) UpdateScheduleNextRun(ctx context.Context, arg UpdateScheduleNextRunParams) error {
-	_, err := q.db.Exec(ctx, updateScheduleNextRun, arg.ID, arg.NextRunAt)
-	return err
+func (q *Queries) SaveIdempotentExecution(ctx context.Context, arg SaveIdempotentExecutionParams) (WebhookIdempotency, error) {
+	row := q.db.QueryRow(ctx, saveIdempotentExecution,
+		arg.WebhookID,
+		arg.IdempotencyKey,
+		arg.ExecutionID,
+		arg.CreatedAt,
+		arg.ExpiresAt,
+	)
+	var i WebhookIdempotency
+	err := row.Scan(
+		&i.WebhookID,
+		&i.IdempotencyKey,
+		&i.ExecutionID,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+	)
+	return i, err
 }
 
 const updateExecutionStatus = `-- name: UpdateExecutionStatus :exec
@@ -395,5 +520,21 @@ func (q *Queries) UpdateExecutionStatus(ctx context.Context, arg UpdateExecution
 		arg.UpdatedAt,
 		arg.CompletedAt,
 	)
+	return err
+}
+
+const updateScheduleNextRun = `-- name: UpdateScheduleNextRun :exec
+UPDATE schedules
+SET next_run_at = $2, leased_by = NULL, lease_expires_at = NULL
+WHERE id = $1
+`
+
+type UpdateScheduleNextRunParams struct {
+	ID        pgtype.UUID
+	NextRunAt pgtype.Timestamptz
+}
+
+func (q *Queries) UpdateScheduleNextRun(ctx context.Context, arg UpdateScheduleNextRunParams) error {
+	_, err := q.db.Exec(ctx, updateScheduleNextRun, arg.ID, arg.NextRunAt)
 	return err
 }
