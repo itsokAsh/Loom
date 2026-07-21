@@ -81,6 +81,20 @@ graph TD
 
 ---
 
+## 🎮 Interactive Backend Simulator
+
+To visualize exactly how Loom protects your backend and handles complex edge cases (Idempotency, Dead Letter Queues, and SSRF attacks), we've built a React-based interactive simulator.
+
+```bash
+cd ui
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173/` in your browser to run the simulations. The simulator visually explains the internal decision-making process of the orchestration engine in plain English, including the **SSRF Blocklist Check** and **Idempotency Locks**.
+
+---
+
 ## 🚀 Getting Started
 
 ### 1. Prerequisites
