@@ -594,6 +594,7 @@ function WorkflowBuilderInner({ toast }) {
     const { silent = false } = opts;
     setActiveExecution(execId);
     return new Promise((resolve) => {
+      let failures = 0;
       const poll = async () => {
         try {
           const ex = await execApi.getExecution(execId);
@@ -603,8 +604,27 @@ function WorkflowBuilderInner({ toast }) {
             setLastTriggerData(triggerData);
             setTriggerInputKind(isScheduledExecution(ex, triggerData) ? 'scheduled' : 'manual');
           }
-          const nodesRes = await execApi.getExecutionNodes(execId);
-          const list = Array.isArray(nodesRes) ? nodesRes : nodesRes?.value || [];
+          let list = [];
+          try {
+            const nodesRes = await execApi.getExecutionNodes(execId);
+            list = Array.isArray(nodesRes) ? nodesRes : nodesRes?.value || [];
+            failures = 0;
+          } catch (nodeErr) {
+            failures += 1;
+            const terminalEarly = status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+            if (terminalEarly && failures >= 3) {
+              if (!silent) {
+                toast(
+                  `Run ${status} but step results failed to load (orchestration). Check loom-orchestration is Live and migrations ran.`,
+                  'error'
+                );
+              }
+              resolve(status);
+              return;
+            }
+            setTimeout(poll, 2500);
+            return;
+          }
           const terminal = status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
           applyNodeResults(list, terminal);
           if (terminal) {
