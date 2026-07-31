@@ -19,6 +19,7 @@ You can also host the UI on **Render Static** (included in `render.yaml`) and sk
 
 2. **Free tier limits** (Render)
    - Web services **sleep after ~15 min** of traffic — first request wakes them (cold start ~30s).
+   - **Background workers** require a paid plan — `render.yaml` uses `type: web` for `loom-worker` instead.
    - **Cron schedules** need always-on workers — unreliable on free tier; manual **Run** in the UI still works.
    - Postgres free expires after 90 days (upgrade or migrate).
 

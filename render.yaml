@@ -58,13 +58,14 @@ services:
       - key: RABBITMQ_URL
         sync: false
 
-  # --- Background worker (HTTP, email, transform nodes) ---
-  - type: worker
+  # --- Node worker (HTTP, email, transform). type: web on free plan (workers need paid).
+  - type: web
     name: loom-worker
     runtime: docker
     dockerfilePath: ./node-worker-pool/Dockerfile
     dockerContext: .
     plan: free
+    healthCheckPath: /healthz
     envVars:
       - key: DATABASE_URL
         fromDatabase:
