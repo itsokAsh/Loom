@@ -106,8 +106,8 @@ Loom requires Docker and Docker Compose. You will also need your own API keys fo
 Clone the repository and set up your environment variables:
 
 ```bash
-git clone https://github.com/your-org/loom.git
-cd loom
+git clone https://github.com/itsokAsh/Loom.git
+cd Loom
 
 # Copy the example environment file
 cp .env.example .env
@@ -203,11 +203,11 @@ In your backend project, install the Loom SDK via your package manager:
 
 *For Go:*
 ```bash
-go get github.com/EgyptianMama/Loom/sdk/go
+go get github.com/itsokAsh/Loom/sdk/go
 ```
 *For Python:*
 ```bash
-pip install git+https://github.com/EgyptianMama/Loom.git#subdirectory=sdk/python
+pip install git+https://github.com/itsokAsh/Loom.git#subdirectory=sdk/python
 ```
 
 **Write the Code:**

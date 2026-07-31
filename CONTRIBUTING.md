@@ -40,8 +40,8 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ```bash
 # Clone your fork
-git clone https://github.com/your-username/loom.git
-cd loom
+git clone https://github.com/your-username/Loom.git
+cd Loom
 
 # Set up environment
 cp .env.example .env
