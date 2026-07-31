@@ -39,7 +39,7 @@ desktop.ini
 .env.*.local
 *.pem
 *.key
-secrets/
+/secrets/
 *.secret
 
 # Test scripts with personal data
