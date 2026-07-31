@@ -12,6 +12,7 @@ RUN go mod download
 RUN go build -o worker ./cmd/worker
 
 FROM alpine:latest
+RUN apk add --no-cache ca-certificates wget
 WORKDIR /app
 COPY --from=builder /app/worker .
 

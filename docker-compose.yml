@@ -90,6 +90,8 @@ services:
       DATABASE_URL: "postgres://postgres:postgres_password@postgres:5432/trigger_db?sslmode=disable"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
       ORCHESTRATION_URL: "http://orchestration-engine:8081"
+      ADMIN_API_KEY: "${ADMIN_API_KEY:-dev-admin-key}"
+      TRIGGER_PUBLIC_URL: "${TRIGGER_PUBLIC_URL:-http://localhost:3000/v1}"
       CREDENTIALS_ENCRYPTION_KEY: "${CREDENTIALS_ENCRYPTION_KEY:-loom-dev-credentials-key-change-me}"
       SERVICE_TOKEN: "${SERVICE_TOKEN:-loom-dev-service-token}"
     depends_on:
@@ -160,6 +162,10 @@ services:
     build:
       context: ./ui
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: "${VITE_API_URL:-/v1}"
+        VITE_ADMIN_API_KEY: "${ADMIN_API_KEY:-dev-admin-key}"
+        VITE_WEBHOOK_BASE: "${VITE_WEBHOOK_BASE:-/v1/webhooks}"
     container_name: workflow_ui
     ports:
       - "3000:80"

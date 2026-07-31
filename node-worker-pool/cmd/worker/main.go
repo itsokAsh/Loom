@@ -12,6 +12,7 @@ import (
 	"github.com/loom/node-worker-pool/internal/db"
 	_ "github.com/loom/node-worker-pool/internal/nodes" // Run init functions to register nodes
 	"github.com/loom/node-worker-pool/internal/worker"
+	"github.com/loom/shared/dburl"
 )
 
 func main() {
@@ -23,7 +24,7 @@ func main() {
 	if dsn == "" {
 		dsn = "postgres://postgres:postgres_password@localhost:5440/worker_db?sslmode=disable"
 	}
-	
+	dsn = dburl.WithDatabaseName(dsn, os.Getenv("DATABASE_NAME"))
 	store, err := db.NewStore(ctx, dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -64,13 +65,19 @@ func main() {
 			res.Write([]byte("OK\n"))
 		})
 		
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8081"
+		}
+		addr := ":" + port
+
 		server := &http.Server{
-			Addr:         ":8081",
+			Addr:         addr,
 			Handler:      mux,
 			ReadTimeout:  5 * time.Second,
 			WriteTimeout: 5 * time.Second,
 		}
-		log.Printf("Health server listening on :8081")
+		log.Printf("Health server listening on %s", addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Health server error: %v", err)
 		}

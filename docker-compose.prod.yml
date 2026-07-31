@@ -1,0 +1,104 @@
+# Production overlay — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# With HTTPS (Caddy):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile tls up -d --build
+
+x-loom-env: &loom-env
+  env_file: .env
+
+services:
+  postgres:
+    <<: *loom-env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: postgres
+    ports: []
+
+  rabbitmq:
+    ports: []
+
+  redis:
+    ports: []
+
+  trigger-migrations:
+    command:
+      - -path
+      - /migrations
+      - -database
+      - postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/trigger_db?sslmode=disable
+      - up
+
+  orchestration-migrations:
+    command:
+      - -path
+      - /migrations
+      - -database
+      - postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/orchestration_db?sslmode=disable
+      - up
+
+  worker-migrations:
+    command:
+      - -path
+      - /migrations
+      - -database
+      - postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/worker_db?sslmode=disable
+      - up
+
+  trigger-api:
+    <<: *loom-env
+    ports: []
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/trigger_db?sslmode=disable
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?Set ADMIN_API_KEY in .env}
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?Set CREDENTIALS_ENCRYPTION_KEY in .env}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?Set SERVICE_TOKEN in .env}
+      TRIGGER_PUBLIC_URL: ${TRIGGER_PUBLIC_URL:?Set TRIGGER_PUBLIC_URL in .env}
+
+  orchestration-engine:
+    <<: *loom-env
+    ports: []
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/orchestration_db?sslmode=disable
+
+  node-worker-pool:
+    <<: *loom-env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/worker_db?sslmode=disable
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+
+  # When tls profile is off, expose UI on host port (default 3000).
+  ui:
+    <<: *loom-env
+    ports:
+      - "${UI_PORT:-3000}:80"
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/v1}
+        VITE_ADMIN_API_KEY: ${ADMIN_API_KEY}
+        VITE_WEBHOOK_BASE: ${VITE_WEBHOOK_BASE:-/v1/webhooks}
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: loom_caddy
+    profiles: ["tls"]
+    <<: *loom-env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DEPLOY_DOMAIN: ${DEPLOY_DOMAIN:-localhost}
+    depends_on:
+      ui:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

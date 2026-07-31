@@ -1,0 +1,15 @@
+.git
+.gitignore
+**/.env
+**/.env.*
+!**/.env.example
+ui/node_modules
+ui/dist
+**/testdata
+interview.md
+interview_answers.md
+docs/newplan.md
+*.md
+!trigger-api/migrations/**
+!orchestration-engine/migrations/**
+!node-worker-pool/migrations/**

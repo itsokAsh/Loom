@@ -236,10 +236,18 @@ func containsCRLF(s string) bool {
 
 func resolveSendGridAPIKey(ctx context.Context, credentialID string, store secrets.SecretStore) (string, error) {
 	if credentialID != "" {
-		base := os.Getenv("TRIGGER_API_URL")
+		base := strings.TrimSpace(os.Getenv("TRIGGER_API_URL"))
 		if base == "" {
-			base = "http://trigger-api:8080"
+			if hp := strings.TrimSpace(os.Getenv("TRIGGER_API_HOSTPORT")); hp != "" {
+				base = "http://" + hp
+			} else {
+				base = "http://trigger-api:8080"
+			}
 		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+		base = strings.TrimRight(base, "/")
 		token := os.Getenv("SERVICE_TOKEN")
 		if token == "" {
 			token = "loom-dev-service-token"

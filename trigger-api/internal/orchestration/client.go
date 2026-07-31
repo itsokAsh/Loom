@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -18,10 +19,17 @@ type Client struct {
 func NewClient() *Client {
 	base := os.Getenv("ORCHESTRATION_URL")
 	if base == "" {
-		base = "http://orchestration-engine:8081"
+		if hp := strings.TrimSpace(os.Getenv("ORCHESTRATION_HOSTPORT")); hp != "" {
+			base = "http://" + hp
+		} else {
+			base = "http://orchestration-engine:8081"
+		}
+	}
+	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+		base = "http://" + base
 	}
 	return &Client{
-		baseURL: base,
+		baseURL:    strings.TrimRight(base, "/"),
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }

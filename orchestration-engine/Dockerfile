@@ -11,6 +11,7 @@ RUN go mod download
 RUN go build -o engine ./cmd/engine/main.go
 
 FROM alpine:latest
+RUN apk add --no-cache ca-certificates wget
 WORKDIR /root/
 COPY --from=builder /app/orchestration-engine/engine .
 CMD ["./engine"]

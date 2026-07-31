@@ -15,6 +15,7 @@ import (
 	"github.com/loom/orchestration-engine/internal/db"
 	"github.com/loom/orchestration-engine/internal/engine"
 	"github.com/loom/orchestration-engine/internal/queue"
+	"github.com/loom/shared/dburl"
 )
 
 func main() {
@@ -25,7 +26,7 @@ func main() {
 	if dsn == "" {
 		dsn = "postgres://postgres:postgres_password@localhost:5440/orchestration_db?sslmode=disable"
 	}
-	
+	dsn = dburl.WithDatabaseName(dsn, os.Getenv("DATABASE_NAME"))
 	store, err := db.NewStore(ctx, dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -83,13 +84,19 @@ func main() {
 		r.Get("/executions/{id}", apiHandler.GetExecution)
 		r.Get("/executions/{id}/nodes", apiHandler.ListNodeExecutions)
 
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8081"
+		}
+		addr := ":" + port
+
 		server := &http.Server{
-			Addr:         ":8081",
+			Addr:         addr,
 			Handler:      r,
 			ReadTimeout:  5 * time.Second,
 			WriteTimeout: 5 * time.Second,
 		}
-		log.Printf("API server listening on :8081")
+		log.Printf("API server listening on %s", addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("API server error: %v", err)
 		}

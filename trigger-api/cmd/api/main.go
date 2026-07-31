@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/loom/shared/dburl"
 	"github.com/loom/trigger-api/internal/credentials"
 	"github.com/loom/trigger-api/internal/db"
 	"github.com/loom/trigger-api/internal/middleware"
@@ -30,6 +31,7 @@ func main() {
 	if dsn == "" {
 		dsn = "postgres://postgres:postgres_password@localhost:5440/trigger_db?sslmode=disable"
 	}
+	dsn = dburl.WithDatabaseName(dsn, os.Getenv("DATABASE_NAME"))
 	store, err := db.NewStore(ctx, dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -56,7 +58,11 @@ func main() {
 	}
 	credHandler := credentials.NewHandler(credStore)
 
-	templateHandler := templates.NewTemplateHandler(templates.NewStoreAdapter(store), "http://localhost:8080/v1")
+	publicAPIBase := os.Getenv("TRIGGER_PUBLIC_URL")
+	if publicAPIBase == "" {
+		publicAPIBase = "http://localhost:3000/v1"
+	}
+	templateHandler := templates.NewTemplateHandler(templates.NewStoreAdapter(store), publicAPIBase)
 	webhookHandler := webhooks.NewHandler(store, publisher)
 	schedulePoller := schedules.NewPoller(store, publisher)
 
@@ -80,6 +86,7 @@ func main() {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(60 * time.Second))
+	r.Use(middleware.CORS(os.Getenv("CORS_ORIGINS")))
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

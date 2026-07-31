@@ -1,0 +1,6 @@
+# TLS reverse proxy for Loom UI (API is proxied at /v1 inside the ui nginx container).
+# Set DEPLOY_DOMAIN in .env and start with: docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile tls up -d --build
+
+{$DEPLOY_DOMAIN} {
+	reverse_proxy ui:80
+}

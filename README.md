@@ -60,7 +60,7 @@ The UI proxies `/v1` to the API. Use header `X-Admin-API-Key: dev-admin-key` for
 4. For **Schedule**: Schedule node → set cron → **Start schedule** → open **Results** (runs appear automatically)
 5. For **Manual**: **Run** tab or top-bar Run → **Results** shows trigger input + each step’s JSON
 
-More detail: [`docs/UI_INIT.md`](docs/UI_INIT.md) · Deploy notes: [`docs/UI_DEPLOY.md`](docs/UI_DEPLOY.md)
+More detail: [`docs/UI_INIT.md`](docs/UI_INIT.md) · Deploy: [`docs/DEPLOY.md`](docs/DEPLOY.md) · UI Docker: [`docs/UI_DEPLOY.md`](docs/UI_DEPLOY.md)
 
 ### Local UI dev (optional)
 
@@ -204,6 +204,8 @@ Create a workflow and webhook via API (see above), then trigger from your backen
 | Doc | Purpose |
 |-----|---------|
 | [`docs/UI_INIT.md`](docs/UI_INIT.md) | Builder walkthrough |
+| [`docs/DEPLOY.md`](docs/DEPLOY.md) | **Production deployment** (VPS, HTTPS, secrets) |
+| [`docs/DEPLOY_VERCEL_RENDER.md`](docs/DEPLOY_VERCEL_RENDER.md) | **Vercel + Render** (portfolio / PaaS) |
 | [`docs/UI_DEPLOY.md`](docs/UI_DEPLOY.md) | UI Docker / nginx |
 | [`docs/Overview.md`](docs/Overview.md) | Original backend-focused scope |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Common issues |

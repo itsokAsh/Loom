@@ -31,6 +31,8 @@ Vite dev server: http://localhost:5173 (proxies `/v1` to localhost:8080)
 
 ## Production notes
 
+- Full guide: [`docs/DEPLOY.md`](DEPLOY.md) (VPS, secrets, HTTPS with Caddy).
 - Set strong `ADMIN_API_KEY`; default `dev-admin-key` is for local use only.
+- Rebuild `ui` after changing `ADMIN_API_KEY` (baked into the static bundle).
 - UI contains no mock data — all workflows and executions come from the API.
-- Run migration `000003_workflow_cascade` for workflow delete support.
+- Migrations run automatically on `docker compose up` (including `000003` / `000004`).

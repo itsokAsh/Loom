@@ -1,0 +1,6 @@
+# Production TLS overlay — hides public UI port; Caddy serves HTTPS.
+# docker compose -f docker-compose.yml -f docker-compose.prod.yml -f deploy/docker-compose.tls.yml --profile tls up -d --build
+
+services:
+  ui:
+    ports: []
