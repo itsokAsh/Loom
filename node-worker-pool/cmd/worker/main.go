@@ -46,21 +46,12 @@ func main() {
 	go func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/healthz", func(res http.ResponseWriter, req *http.Request) {
-			// Actively ping DB
-			if _, pingErr := db.NewStore(req.Context(), dsn); pingErr != nil {
+			// Lightweight only — do not open new RabbitMQ connections per Render probe.
+			if err := store.Ping(req.Context()); err != nil {
 				res.WriteHeader(http.StatusServiceUnavailable)
 				res.Write([]byte("Database unreachable\n"))
 				return
 			}
-			
-			// We ideally want to ping RabbitMQ but w.conn isn't exposed and amqp doesn't have an easy ping.
-			// Re-dialing to verify connection works as a readiness check.
-			if _, dialErr := worker.NewWorker(rabbitURL, store); dialErr != nil {
-				res.WriteHeader(http.StatusServiceUnavailable)
-				res.Write([]byte("RabbitMQ unreachable\n"))
-				return
-			}
-			
 			res.WriteHeader(http.StatusOK)
 			res.Write([]byte("OK\n"))
 		})

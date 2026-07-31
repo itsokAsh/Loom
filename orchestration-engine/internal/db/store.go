@@ -29,6 +29,10 @@ func (s *Store) Close() {
 	s.db.Close()
 }
 
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.Ping(ctx)
+}
+
 // WithRunLock executes a function inside a transaction where the workflow_run row is locked FOR UPDATE.
 func (s *Store) WithRunLock(ctx context.Context, executionID pgtype.UUID, fn func(context.Context, *Queries) error) error {
 	tx, err := s.db.Begin(ctx)

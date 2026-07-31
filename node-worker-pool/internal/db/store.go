@@ -30,6 +30,10 @@ func (s *Store) Close() {
 	}
 }
 
+func (s *Store) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
+}
+
 // ReserveIdempotencyKey attempts to insert an IN_PROGRESS record for a given execution ID and node ID.
 // Returns true if the reservation was successfully acquired.
 // Returns false if a record already exists (meaning another worker reserved or completed it).
