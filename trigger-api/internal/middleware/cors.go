@@ -10,18 +10,22 @@ import (
 // Use "*" to allow any origin (portfolio demos only).
 func CORS(origins string) func(http.Handler) http.Handler {
 	allowed := parseOrigins(origins)
+	// Empty env → allow all (portfolio / first deploy). Prefer explicit UI origin in production.
+	if len(allowed) == 0 {
+		allowed = []string{"*"}
+	}
 	allowAll := len(allowed) == 1 && allowed[0] == "*"
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if len(allowed) == 0 {
-				next.ServeHTTP(w, r)
-				return
-			}
-
 			origin := r.Header.Get("Origin")
 			if allowAll {
-				w.Header().Set("Access-Control-Allow-Origin", "*")
+				if origin != "" {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Vary", "Origin")
+				} else {
+					w.Header().Set("Access-Control-Allow-Origin", "*")
+				}
 			} else if origin != "" && originAllowed(origin, allowed) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
@@ -32,6 +36,7 @@ func CORS(origins string) func(http.Handler) http.Handler {
 				"Access-Control-Allow-Headers",
 				"Authorization, Content-Type, X-Admin-API-Key, X-Signature, Idempotency-Key",
 			)
+			w.Header().Set("Access-Control-Max-Age", "86400")
 
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
