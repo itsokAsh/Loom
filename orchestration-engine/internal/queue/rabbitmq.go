@@ -30,9 +30,13 @@ func NewRabbitMQ(url string) (*RabbitMQ, error) {
 		return nil, fmt.Errorf("failed to set QoS: %w", err)
 	}
 
+	// Worker task queue uses a dead-letter exchange (must match node-worker-pool).
+	if err := setupWorkerTaskQueue(ch); err != nil {
+		return nil, err
+	}
+
 	queues := []string{
 		"trigger-to-orchestration",
-		"orchestration-to-worker",
 		"worker-to-orchestration",
 		"orchestration-to-trigger-status",
 	}
@@ -159,6 +163,43 @@ func (r *RabbitMQ) PublishRaw(ctx context.Context, queue string, body []byte) er
 	)
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+// setupWorkerTaskQueue declares DLX/DLQ and orchestration-to-worker with the same args as node-worker-pool.
+func setupWorkerTaskQueue(ch *amqp.Channel) error {
+	dlxName := "worker-dlx"
+	if err := ch.ExchangeDeclare(dlxName, "direct", true, false, false, false, nil); err != nil {
+		return fmt.Errorf("failed to declare DLX: %w", err)
+	}
+
+	dlqName := "worker-dlq"
+	if _, err := ch.QueueDeclare(dlqName, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("failed to declare DLQ: %w", err)
+	}
+
+	if err := ch.QueueBind(dlqName, "worker-dlq-key", dlxName, false, nil); err != nil {
+		return fmt.Errorf("failed to bind DLQ: %w", err)
+	}
+
+	args := amqp.Table{
+		"x-dead-letter-exchange":    dlxName,
+		"x-dead-letter-routing-key": "worker-dlq-key",
+	}
+
+	// Do not use QueueDeclarePassive here: a missing queue returns 404 and
+	// closes the channel, so the following Declare fails with 504.
+	_, err := ch.QueueDeclare(
+		"orchestration-to-worker",
+		true,
+		false,
+		false,
+		false,
+		args,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to declare orchestration-to-worker: %w", err)
 	}
 	return nil
 }

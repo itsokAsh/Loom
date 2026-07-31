@@ -2,6 +2,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: workflow_postgres
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres_password
@@ -88,6 +89,9 @@ services:
     environment:
       DATABASE_URL: "postgres://postgres:postgres_password@postgres:5432/trigger_db?sslmode=disable"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      ORCHESTRATION_URL: "http://orchestration-engine:8081"
+      CREDENTIALS_ENCRYPTION_KEY: "${CREDENTIALS_ENCRYPTION_KEY:-loom-dev-credentials-key-change-me}"
+      SERVICE_TOKEN: "${SERVICE_TOKEN:-loom-dev-service-token}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,6 +99,12 @@ services:
         condition: service_healthy
       trigger-migrations:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     restart: unless-stopped
 
   orchestration-engine:
@@ -102,6 +112,8 @@ services:
       context: .
       dockerfile: orchestration-engine/Dockerfile
     container_name: workflow_orchestration
+    ports:
+      - "8081:8081"
     environment:
       DATABASE_URL: "postgres://postgres:postgres_password@postgres:5432/orchestration_db?sslmode=disable"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
@@ -128,6 +140,8 @@ services:
       DATABASE_URL: "postgres://postgres:postgres_password@postgres:5432/worker_db?sslmode=disable"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
       SENDGRID_API_KEY: "${SENDGRID_API_KEY}"
+      TRIGGER_API_URL: "http://trigger-api:8080"
+      SERVICE_TOKEN: "${SERVICE_TOKEN:-loom-dev-service-token}"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -140,6 +154,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: workflow_ui
+    ports:
+      - "3000:80"
+    depends_on:
+      trigger-api:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

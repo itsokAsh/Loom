@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/loom/orchestration-engine/internal/api"
 	"github.com/loom/orchestration-engine/internal/dag"
 	"github.com/loom/orchestration-engine/internal/db"
 	"github.com/loom/orchestration-engine/internal/engine"
@@ -60,37 +62,36 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	// Health check server
+	// Health + execution API server
+	apiHandler := api.NewHandler(store)
 	go func() {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/healthz", func(res http.ResponseWriter, req *http.Request) {
-			// Actively ping DB
+		r := chi.NewRouter()
+		r.Get("/healthz", func(res http.ResponseWriter, req *http.Request) {
 			if _, pingErr := db.NewStore(req.Context(), dsn); pingErr != nil {
 				res.WriteHeader(http.StatusServiceUnavailable)
 				res.Write([]byte("Database unreachable\n"))
 				return
 			}
-			
-			// Ping RabbitMQ
 			if _, dialErr := queue.NewRabbitMQ(rmqURL); dialErr != nil {
 				res.WriteHeader(http.StatusServiceUnavailable)
 				res.Write([]byte("RabbitMQ unreachable\n"))
 				return
 			}
-			
 			res.WriteHeader(http.StatusOK)
 			res.Write([]byte("OK\n"))
 		})
-		
+		r.Get("/executions/{id}", apiHandler.GetExecution)
+		r.Get("/executions/{id}/nodes", apiHandler.ListNodeExecutions)
+
 		server := &http.Server{
 			Addr:         ":8081",
-			Handler:      mux,
+			Handler:      r,
 			ReadTimeout:  5 * time.Second,
 			WriteTimeout: 5 * time.Second,
 		}
-		log.Printf("Health server listening on :8081")
+		log.Printf("API server listening on :8081")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Health server error: %v", err)
+			log.Fatalf("API server error: %v", err)
 		}
 	}()
 

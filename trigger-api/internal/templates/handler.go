@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -74,7 +75,10 @@ func (h *TemplateHandler) ListTemplates(w http.ResponseWriter, r *http.Request) 
 
 // CreateFromTemplate handles POST /v1/templates/{template_id}/create
 func (h *TemplateHandler) CreateFromTemplate(w http.ResponseWriter, r *http.Request) {
-	templateID := chi.URLParam(r, "template_id")
+	templateID := chi.URLParam(r, "id")
+	if templateID == "" {
+		templateID = chi.URLParam(r, "template_id")
+	}
 
 	template, err := GetTemplateByID(templateID)
 	if err != nil {
@@ -83,8 +87,6 @@ func (h *TemplateHandler) CreateFromTemplate(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := validateTemplate(*template); err != nil {
-		// A built-in template should never fail this, but a future custom
-		// template must go through the same check.
 		http.Error(w, "Template failed security validation: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -96,17 +98,32 @@ func (h *TemplateHandler) CreateFromTemplate(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
-	// Idempotency: reuse the existing workflow for this template+config
-	// fingerprint rather than creating a duplicate workflow/webhook pair
-	// every time initTemplate() runs.
-	fingerprint := configFingerprint(templateID, req.Config)
-	if existing, ok, err := h.store.FindWorkflowByFingerprint(r.Context(), fingerprint); err == nil && ok {
-		webhook, err := h.store.GetWebhookByWorkflowID(r.Context(), existing.ID)
-		if err == nil {
-			h.writeWebhookResponse(w, existing.ID, webhook)
-			return
+	if req.Config == nil {
+		req.Config = map[string]string{}
+	}
+	// Apply template defaults for missing keys
+	for _, f := range template.ConfigFields {
+		if _, ok := req.Config[f.Key]; !ok && f.Default != "" {
+			req.Config[f.Key] = f.Default
 		}
+	}
+
+	triggerMode := template.TriggerMode
+	if triggerMode == "" {
+		triggerMode = "webhook"
+	}
+
+	fingerprint := configFingerprint(templateID+"|"+triggerMode+"|v2", req.Config)
+	if existing, ok, err := h.store.FindWorkflowByFingerprint(r.Context(), fingerprint); err == nil && ok {
+		if strings.EqualFold(triggerMode, "webhook") {
+			webhook, err := h.store.GetWebhookByWorkflowID(r.Context(), existing.ID)
+			if err == nil {
+				h.writeWebhookResponse(w, existing.ID, webhook, true)
+				return
+			}
+		}
+		h.writeManualResponse(w, existing.ID, template, true)
+		return
 	}
 
 	dag, err := interpolateConfig(template.WorkflowDAG, req.Config)
@@ -114,6 +131,12 @@ func (h *TemplateHandler) CreateFromTemplate(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Config interpolation failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	startLabel := "Manual Trigger"
+	if strings.EqualFold(triggerMode, "webhook") {
+		startLabel = "Webhook"
+	}
+	dag = attachStartUI(dag, triggerMode, startLabel)
 
 	dagBytes, err := json.Marshal(dag)
 	if err != nil {
@@ -133,8 +156,11 @@ func (h *TemplateHandler) CreateFromTemplate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Each webhook gets its own secret. This is the secret the SDK must
-	// cache and sign with — NOT a global loom.webhook_secret.
+	if strings.EqualFold(triggerMode, "manual") {
+		h.writeManualResponse(w, workflowID, template, false)
+		return
+	}
+
 	webhook, err := h.store.CreateWebhook(r.Context(), CreateWebhookParams{
 		WorkflowID: workflowID,
 		Path:       generateRandomPath(),
@@ -145,13 +171,29 @@ func (h *TemplateHandler) CreateFromTemplate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	h.writeWebhookResponse(w, workflowID, webhook)
+	h.writeWebhookResponse(w, workflowID, webhook, false)
 }
 
-func (h *TemplateHandler) writeWebhookResponse(w http.ResponseWriter, workflowID string, webhook *WebhookResponse) {
+func (h *TemplateHandler) writeManualResponse(w http.ResponseWriter, workflowID string, template *Template, reused bool) {
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]interface{}{
+		"workflow_id":     workflowID,
+		"trigger_mode":    "manual",
+		"sample_trigger":  template.SampleTrigger,
+		"setup_hint":      template.SetupHint,
+		"beginner_ready":  template.BeginnerReady,
+		"needs_sendgrid":  template.NeedsSendGrid,
+		"reused":          reused,
+	}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *TemplateHandler) writeWebhookResponse(w http.ResponseWriter, workflowID string, webhook *WebhookResponse, reused bool) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"workflow_id": workflowID,
+		"workflow_id":  workflowID,
+		"trigger_mode": "webhook",
+		"reused":       reused,
 		"webhook": map[string]string{
 			"path":   webhook.Path,
 			"secret": webhook.Secret,
@@ -160,14 +202,12 @@ func (h *TemplateHandler) writeWebhookResponse(w http.ResponseWriter, workflowID
 	})
 }
 
-// generateRandomPath creates a random webhook path
 func generateRandomPath() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)[:16]
 }
 
-// generateWebhookSecret creates a cryptographically secure webhook secret
 func generateWebhookSecret() string {
 	b := make([]byte, 32)
 	rand.Read(b)

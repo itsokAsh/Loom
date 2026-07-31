@@ -11,8 +11,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/loom/trigger-api/internal/credentials"
 	"github.com/loom/trigger-api/internal/db"
 	"github.com/loom/trigger-api/internal/middleware"
+	"github.com/loom/trigger-api/internal/orchestration"
 	"github.com/loom/trigger-api/internal/queue"
 	"github.com/loom/trigger-api/internal/schedules"
 	"github.com/loom/trigger-api/internal/templates"
@@ -45,8 +47,15 @@ func main() {
 	defer publisher.Close()
 
 	workflowService := workflows.NewService(store)
-	workflowHandler := workflows.NewHandler(workflowService, store)
-	
+	orchClient := orchestration.NewClient()
+	workflowHandler := workflows.NewHandler(workflowService, store, orchClient, publisher)
+
+	credStore, err := credentials.NewStore(store.Pool)
+	if err != nil {
+		log.Fatalf("Failed to init credentials store: %v", err)
+	}
+	credHandler := credentials.NewHandler(credStore)
+
 	templateHandler := templates.NewTemplateHandler(templates.NewStoreAdapter(store), "http://localhost:8080/v1")
 	webhookHandler := webhooks.NewHandler(store, publisher)
 	schedulePoller := schedules.NewPoller(store, publisher)
@@ -72,6 +81,11 @@ func main() {
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(60 * time.Second))
 
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+
 	// Old webhook endpoint deprecation redirect
 	r.Post("/webhooks/{path}", func(w http.ResponseWriter, r *http.Request) {
 		path := chi.URLParam(r, "path")
@@ -85,6 +99,9 @@ func main() {
 			rateLimiter.Middleware(),
 		).Post("/webhooks/{path}", webhookHandler.HandleIncomingWebhook)
 
+		// Worker-only secret resolve (service token, not admin key)
+		r.Get("/internal/credentials/{id}", credHandler.ResolveSecret)
+
 		// Management routes protected by API key
 		r.Group(func(r chi.Router) {
 			adminKey := os.Getenv("ADMIN_API_KEY")
@@ -94,13 +111,26 @@ func main() {
 			r.Use(middleware.AdminAPIKeyMiddleware(adminKey))
 
 			r.Post("/workflows", workflowHandler.CreateWorkflow)
+			r.Get("/workflows", workflowHandler.ListWorkflows)
+			r.Post("/workflows/validate", workflowHandler.ValidateWorkflowDAG)
 			r.Post("/workflows/{id}/versions", workflowHandler.AddVersion)
 			r.Get("/workflows/{id}", workflowHandler.GetWorkflow)
+			r.Patch("/workflows/{id}", workflowHandler.UpdateWorkflow)
+			r.Delete("/workflows/{id}", workflowHandler.DeleteWorkflow)
+			r.Post("/workflows/{id}/execute", workflowHandler.ExecuteWorkflow)
 			r.Post("/workflows/{id}/webhooks", workflowHandler.CreateWebhook)
+			r.Get("/workflows/{id}/webhooks", workflowHandler.ListWebhooks)
 			r.Post("/workflows/{id}/schedules", workflowHandler.CreateSchedule)
+			r.Get("/workflows/{id}/schedules", workflowHandler.ListSchedules)
+			r.Delete("/workflows/{id}/schedules/{scheduleId}", workflowHandler.DeleteSchedule)
 			r.Get("/workflows/{id}/executions", workflowHandler.ListExecutions)
 			r.Get("/executions/{id}", workflowHandler.GetExecution)
-			
+			r.Get("/executions/{id}/nodes", workflowHandler.GetExecutionNodes)
+
+			r.Get("/credentials", credHandler.List)
+			r.Post("/credentials", credHandler.Create)
+			r.Delete("/credentials/{id}", credHandler.Delete)
+
 			// Templates
 			r.Get("/templates", templateHandler.ListTemplates)
 			r.Post("/templates/{id}/create", templateHandler.CreateFromTemplate)

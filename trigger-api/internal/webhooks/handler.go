@@ -14,6 +14,7 @@ import (
 	"github.com/loom/trigger-api/internal/db"
 	"github.com/loom/trigger-api/internal/middleware"
 	"github.com/loom/trigger-api/internal/templates"
+	"github.com/loom/trigger-api/internal/workflows"
 )
 
 type WebhookStore interface {
@@ -167,12 +168,18 @@ func (h *Handler) HandleIncomingWebhook(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	workerDAG := wv.DagDefinition
+	// Strip UI / start nodes if present (saved canvas format)
+	if stripped, err := workflows.StripUIFromDAG(wv.DagDefinition); err == nil {
+		workerDAG = stripped
+	}
+
 	msg := contracts.NewRunMessage{
 		ExecutionID:     fmt.Sprintf("%x", exec.ID.Bytes),
 		WorkflowID:      fmt.Sprintf("%x", exec.WorkflowID.Bytes),
 		WorkflowVersion: int(exec.WorkflowVersion),
 		TriggerData:     payload,
-		DAGDefinition:   wv.DagDefinition,
+		DAGDefinition:   workerDAG,
 		TriggeredAt:     time.Now(),
 	}
 

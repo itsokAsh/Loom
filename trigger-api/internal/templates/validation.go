@@ -16,6 +16,9 @@ var allowedConfigKeys = map[string]bool{
 	"sendgrid_from_email": true,
 	"app_name":            true,
 	"admin_email":         true,
+	"crm_api_url":         true,
+	"health_check_url":    true,
+	"relay_target_url":    true,
 }
 
 // sanitizeValue rejects control characters (CRLF) that could be used for
@@ -59,6 +62,11 @@ func interpolateConfig(dag WorkflowDAG, config map[string]string) (WorkflowDAG, 
 		return WorkflowDAG{}, err
 	}
 	return interpolated, nil
+}
+
+// ValidateDAG applies the same security rules as built-in templates to arbitrary DAGs.
+func ValidateDAG(dag WorkflowDAG) error {
+	return validateTemplate(Template{WorkflowDAG: dag})
 }
 
 // validateTemplate enforces structural security rules on any template

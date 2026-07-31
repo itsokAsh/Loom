@@ -11,6 +11,7 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/loom/trigger-api/internal/db"
 	"github.com/loom/trigger-api/internal/queue"
+	"github.com/loom/trigger-api/internal/workflows"
 	contracts "github.com/loom/shared/queue-contracts"
 )
 
@@ -91,12 +92,17 @@ func (p *Poller) processSchedule(ctx context.Context, s db.Schedule) {
 		return // Likely duplicate, DO NOTHING caught it
 	}
 
+	dagDef := wv.DagDefinition
+	if stripped, err := workflows.StripUIFromDAG(wv.DagDefinition); err == nil {
+		dagDef = stripped
+	}
+
 	msg := contracts.NewRunMessage{
 		ExecutionID:     fmt.Sprintf("%x", exec.ID.Bytes),
 		WorkflowID:      fmt.Sprintf("%x", exec.WorkflowID.Bytes),
 		WorkflowVersion: int(exec.WorkflowVersion),
 		TriggerData:     map[string]interface{}{"cron_time": s.NextRunAt.Time},
-		DAGDefinition:   wv.DagDefinition,
+		DAGDefinition:   dagDef,
 		TriggeredAt:     time.Now(),
 	}
 

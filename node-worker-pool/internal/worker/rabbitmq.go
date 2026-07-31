@@ -73,12 +73,13 @@ func NewWorker(url string, store *db.Store) (*Worker, error) {
 	}
 
 	taskQueue := "orchestration-to-worker"
-	
+
 	args := amqp.Table{
 		"x-dead-letter-exchange":    dlxName,
 		"x-dead-letter-routing-key": "worker-dlq-key",
 	}
 
+	// Avoid QueueDeclarePassive: missing queue closes the channel (404 → 504).
 	_, err = ch.QueueDeclare(
 		taskQueue,
 		true,  // durable

@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/mail"
+	"os"
 	"strings"
 	"time"
 
@@ -24,12 +27,13 @@ type EmailExecutor struct {
 
 // EmailConfig defines the email node configuration
 type EmailConfig struct {
-	To      string   `json:"to"`
-	Subject string   `json:"subject"`
-	Body    string   `json:"body"`
-	From    string   `json:"from,omitempty"`
-	CC      []string `json:"cc,omitempty"`
-	BCC     []string `json:"bcc,omitempty"`
+	To           string   `json:"to"`
+	Subject      string   `json:"subject"`
+	Body         string   `json:"body"`
+	From         string   `json:"from,omitempty"`
+	CC           []string `json:"cc,omitempty"`
+	BCC          []string `json:"bcc,omitempty"`
+	CredentialID string   `json:"credentialId,omitempty"`
 }
 
 // SendGridPayload represents the SendGrid API request format
@@ -77,8 +81,8 @@ func (e *EmailExecutor) Execute(ctx context.Context, config json.RawMessage) (js
 		return nil, fmt.Errorf("email validation failed: %w", err)
 	}
 
-	// Get SendGrid API key
-	apiKey, err := e.secretStore.Get("SENDGRID_API_KEY")
+	// Get SendGrid API key: credentialId from Loom UI, else env SENDGRID_API_KEY
+	apiKey, err := resolveSendGridAPIKey(ctx, emailConfig.CredentialID, e.secretStore)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SendGrid API key: %w", err)
 	}
@@ -228,4 +232,42 @@ func isValidEmail(email string) bool {
 // containsCRLF checks if string contains CRLF characters
 func containsCRLF(s string) bool {
 	return strings.Contains(s, "\r") || strings.Contains(s, "\n")
+}
+
+func resolveSendGridAPIKey(ctx context.Context, credentialID string, store secrets.SecretStore) (string, error) {
+	if credentialID != "" {
+		base := os.Getenv("TRIGGER_API_URL")
+		if base == "" {
+			base = "http://trigger-api:8080"
+		}
+		token := os.Getenv("SERVICE_TOKEN")
+		if token == "" {
+			token = "loom-dev-service-token"
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/internal/credentials/"+credentialID, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("X-Service-Token", token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("credential lookup failed: %w", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("credential lookup status %d: %s", resp.StatusCode, string(body))
+		}
+		var out struct {
+			APIKey string `json:"apiKey"`
+		}
+		if err := json.Unmarshal(body, &out); err != nil {
+			return "", err
+		}
+		if out.APIKey == "" {
+			return "", fmt.Errorf("empty api key from credential")
+		}
+		return out.APIKey, nil
+	}
+	return store.Get("SENDGRID_API_KEY")
 }
