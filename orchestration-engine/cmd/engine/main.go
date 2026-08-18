@@ -69,7 +69,7 @@ func main() {
 		r := chi.NewRouter()
 		// Lightweight check only — do NOT open new RabbitMQ/DB pools per probe
 		// (Render health checks every few seconds; free CloudAMQP has low connection limits).
-		r.Get("/healthz", func(res http.ResponseWriter, req *http.Request) {
+		healthCheck := func(res http.ResponseWriter, req *http.Request) {
 			if err := store.Ping(req.Context()); err != nil {
 				res.WriteHeader(http.StatusServiceUnavailable)
 				res.Write([]byte("Database unreachable\n"))
@@ -77,7 +77,9 @@ func main() {
 			}
 			res.WriteHeader(http.StatusOK)
 			res.Write([]byte("OK\n"))
-		})
+		}
+		r.Get("/healthz", healthCheck)
+		r.Head("/healthz", healthCheck)
 		r.Get("/executions/{id}", apiHandler.GetExecution)
 		r.Get("/executions/{id}/nodes", apiHandler.ListNodeExecutions)
 

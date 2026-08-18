@@ -88,10 +88,12 @@ func main() {
 	r.Use(chimiddleware.Timeout(60 * time.Second))
 	r.Use(middleware.CORS(os.Getenv("CORS_ORIGINS")))
 
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	healthCheck := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
-	})
+	}
+	r.Get("/healthz", healthCheck)
+	r.Head("/healthz", healthCheck)
 
 	// Old webhook endpoint deprecation redirect
 	r.Post("/webhooks/{path}", func(w http.ResponseWriter, r *http.Request) {
